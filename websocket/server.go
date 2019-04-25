@@ -1,13 +1,10 @@
 package websocket
 
 import (
-	"sync"
-
-	"github.com/kataras/iris/context"
-
 	"github.com/gorilla/websocket"
 	"github.com/lightjiang/webds/websocket/message"
 	"net/http"
+	"sync"
 )
 
 type (
@@ -72,39 +69,6 @@ func New(cfg Config) *Server {
 	}
 }
 
-// Handler builds the handler based on the configuration and returns it.
-// It should be called once per Server, its result should be passed
-// as a middleware to an iris route which will be responsible
-// to register the websocket's endpoint.
-//
-// Endpoint is the path which the websocket Server will listen for clients/connections.
-//
-// To serve the built'n javascript client-side library look the `websocket.ClientHandler`.
-func (s *Server) Handler() context.Handler {
-	return func(ctx context.Context) {
-		c := s.Upgrade(ctx.ResponseWriter(), ctx.Request(), ctx.ResponseWriter().Header())
-
-		if err := c.Err(); err != nil {
-			ctx.Application().Logger().Warnf("websocket error: %v\n", err)
-			ctx.StatusCode(503) // Status Service Unavailable
-			return
-		}
-		// NOTE TO ME: fire these first BEFORE startReader and startPinger
-		// in order to set the events and any messages to send
-		// the startPinger will send the OK to the client and only
-		// then the client is able to send and receive from Server
-		// when all things are ready and only then. DO NOT change this order.
-
-		// fire the on connection event callbacks, if any
-		for i := range s.onConnectionListeners {
-			s.onConnectionListeners[i](c)
-		}
-
-		// start the ping and the messages reader
-		c.Wait()
-	}
-}
-
 // Upgrade upgrades the HTTP Server connection to the WebSocket protocol.
 //
 // The responseHeader is included in the response to the client's upgrade
@@ -117,11 +81,10 @@ func (s *Server) Handler() context.Handler {
 // For a more high-level function use the `Handler()` and `OnConnecton` events.
 // This one does not starts the connection's writer and reader, so after your `On/OnMessage` events registration
 // the caller has to call the `Connection#Wait` function, otherwise the connection will be not handled.
-func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request, responseHeader http.Header) Connection {
+func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request, responseHeader http.Header) error {
 	conn, err := s.upgrader.Upgrade(w, r, responseHeader)
 	if err != nil {
-
-		return &connection{err: err}
+		return err
 	}
 	cid := s.config.IDGenerator(r)
 	// create the new connection
@@ -131,8 +94,12 @@ func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request, responseHeader 
 
 	// join to itself
 	s.Join(c.id, c.id)
+	for i := range s.onConnectionListeners {
+		s.onConnectionListeners[i](c)
+	}
 
-	return c
+	c.Wait()
+	return nil
 }
 
 func (s *Server) addConnection(c *connection) {
