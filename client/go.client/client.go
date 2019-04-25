@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"sync"
 	"time"
+	"webds/websocket/message"
 )
 
 const (
@@ -155,7 +156,7 @@ func New(conf *Config) *connection {
 }
 
 type connection struct {
-	messageSerializer *messageSerializer
+	messageSerializer *message.MessageSerializer
 	id                string
 	writerMu          sync.Mutex
 	conn              *websocket.Conn
@@ -174,7 +175,7 @@ type connection struct {
 
 func (c *connection) init(conf *Config) {
 	c.config = conf
-	c.messageSerializer = NewMessageSerializer(c.config.EvtMessagePrefix)
+	c.messageSerializer = message.NewMessageSerializer(c.config.EvtMessagePrefix)
 	// will keep connecting to server
 	if c.config.BinaryMessages {
 		c.messageType = websocket.BinaryMessage
@@ -282,13 +283,13 @@ func (c *connection) startReader() error {
 
 func (c *connection) messageReceive(data []byte) {
 	if bytes.HasPrefix(data, c.config.EvtMessagePrefix) {
-		evt := c.messageSerializer.getWebsocketCustomEvent(data)
+		evt := c.messageSerializer.GetWebsocketCustomEvent(data)
 		listeners, ok := c.onEventListeners[string(evt)]
 		if !ok || len(listeners) == 0 {
 			golog.Warnf("received data but no func handle it: %s", evt)
 			return
 		}
-		message, err := c.messageSerializer.deserialize(evt, data)
+		message, err := c.messageSerializer.Deserialize(evt, data)
 		if message == nil || err != nil {
 			golog.Warnf("received blank data or deserialize failed for %v", err)
 			return
@@ -378,7 +379,7 @@ func (c *connection) EmitMessage(nativeMessage []byte) error {
 }
 
 func (c *connection) Emit(event string, message interface{}) error {
-	m, err := c.messageSerializer.serialize(event, message)
+	m, err := c.messageSerializer.Serialize(event, message)
 	if err != nil {
 		return err
 	}

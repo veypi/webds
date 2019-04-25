@@ -1,12 +1,13 @@
-package client
+package message
 
 import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
-	"fmt"
 	"strconv"
 
+	"errors"
+	"fmt"
 	"github.com/valyala/bytebufferpool"
 )
 
@@ -50,7 +51,7 @@ const (
 
 var messageSeparatorByte = messageSeparator[0]
 
-type messageSerializer struct {
+type MessageSerializer struct {
 	prefix []byte
 
 	prefixLen       int
@@ -62,8 +63,8 @@ type messageSerializer struct {
 	buf *bytebufferpool.Pool
 }
 
-func NewMessageSerializer(messagePrefix []byte) *messageSerializer {
-	return &messageSerializer{
+func NewMessageSerializer(messagePrefix []byte) *MessageSerializer {
+	return &MessageSerializer{
 		prefix:          messagePrefix,
 		prefixLen:       len(messagePrefix),
 		separatorLen:    len(messageSeparator),
@@ -83,7 +84,7 @@ var (
 // websocketMessageSerialize serializes a custom websocket message from websocketServer to be delivered to the client
 // returns the  string form of the message
 // Supported data types are: string, int, bool, bytes and JSON.
-func (ms *messageSerializer) serialize(event string, data interface{}) ([]byte, error) {
+func (ms *MessageSerializer) Serialize(event string, data interface{}) ([]byte, error) {
 	b := ms.buf.Get()
 	b.Write(ms.prefix)
 	b.WriteString(event)
@@ -127,13 +128,15 @@ func (ms *messageSerializer) serialize(event string, data interface{}) ([]byte, 
 	return message, nil
 }
 
+var errInvalidTypeMessage = errors.New("Type %s is invalid for message: %s")
+
 // deserialize deserializes a custom websocket message from the client
 // ex: go-websocket-message;chat;4;themarshaledstringfromajsonstruct will return 'hello' as string
 // Supported data types are: string, int, bool, bytes and JSON.
-func (ms *messageSerializer) deserialize(event []byte, websocketMessage []byte) (interface{}, error) {
+func (ms *MessageSerializer) Deserialize(event []byte, websocketMessage []byte) (interface{}, error) {
 	dataStartIdx := ms.prefixAndSepIdx + len(event) + 3
 	if len(websocketMessage) <= dataStartIdx {
-		return nil, fmt.Errorf("websocket invalid message: %s", string(websocketMessage))
+		return nil, errors.New("websocket invalid message: " + string(websocketMessage))
 	}
 
 	typ, err := strconv.Atoi(string(websocketMessage[ms.prefixAndSepIdx+len(event)+1 : ms.prefixAndSepIdx+len(event)+2])) // in order to go-websocket-message;user;-> 4
@@ -160,16 +163,17 @@ func (ms *messageSerializer) deserialize(event []byte, websocketMessage []byte) 
 	case messageTypeBytes:
 		return data, nil
 	case messageTypeJSON:
+		return data, nil
 		//var msg interface{}
 		//err := json.Unmarshal(data, &msg)
-		return data, nil
+		//return msg, err
 	default:
-		return nil, fmt.Errorf("websocket error: invalid message type: %s for message: %s", messageType(typ).Name(), string(websocketMessage))
+		return nil, errors.New(fmt.Sprintf("Type %s is invalid for message: %s", messageType(typ).Name(), websocketMessage))
 	}
 }
 
 // getWebsocketCustomEvent return empty string when the websocketMessage is native message
-func (ms *messageSerializer) getWebsocketCustomEvent(websocketMessage []byte) []byte {
+func (ms *MessageSerializer) GetWebsocketCustomEvent(websocketMessage []byte) []byte {
 	if len(websocketMessage) < ms.prefixAndSepIdx {
 		return nil
 	}

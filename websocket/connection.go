@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/kataras/iris/context"
 )
 
 type (
@@ -156,12 +155,6 @@ type (
 		// used by ping messages and any CloseMessage types.
 		Write(websocketMessageType int, data []byte) error
 
-		// Context returns the (upgraded) context.Context of this connection
-		// avoid using it, you normally don't need it,
-		// websocket has everything you need to authenticate the user BUT if it's necessary
-		// then  you use it to receive user information, for example: from headers
-		Context() context.Context
-
 		// OnDisconnect registers a callback which is fired when this connection is closed by an error or manual
 		OnDisconnect(DisconnectFunc)
 		// OnError registers a callback which fires when this connection occurs an error
@@ -235,8 +228,6 @@ type (
 		broadcast Emitter // pre-defined emitter that sends message to all except this
 		all       Emitter // pre-defined emitter which sends message to all clients
 
-		// access to the Context, use with caution, you can't use response writer as you imagine.
-		ctx    context.Context
 		values ConnectionValues
 		server *Server
 		// #119 , websocket writers are not protected by locks inside the gorilla's websocket code
@@ -257,7 +248,7 @@ var _ Connection = &connection{}
 // Use the `Connection#Disconnect` instead.
 const CloseMessage = websocket.CloseMessage
 
-func newConnection(ctx context.Context, s *Server, underlineConn UnderlineConnection, id string) *connection {
+func newConnection(s *Server, underlineConn UnderlineConnection, id string) *connection {
 	c := &connection{
 		underline:                underlineConn,
 		id:                       id,
@@ -269,7 +260,6 @@ func newConnection(ctx context.Context, s *Server, underlineConn UnderlineConnec
 		onEventListeners:         make(map[string][]MessageFunc, 0),
 		onPongListeners:          make([]PongFunc, 0),
 		started:                  false,
-		ctx:                      ctx,
 		server:                   s,
 	}
 
@@ -417,13 +407,13 @@ func (c *connection) messageReceived(data []byte) {
 
 	if bytes.HasPrefix(data, c.server.config.EvtMessagePrefix) {
 		//it's a custom ws message
-		receivedEvt := c.server.messageSerializer.getWebsocketCustomEvent(data)
+		receivedEvt := c.server.messageSerializer.GetWebsocketCustomEvent(data)
 		listeners, ok := c.onEventListeners[string(receivedEvt)]
 		if !ok || len(listeners) == 0 {
 			return // if not listeners for this event exit from here
 		}
 
-		customMessage, err := c.server.messageSerializer.deserialize(receivedEvt, data)
+		customMessage, err := c.server.messageSerializer.Deserialize(receivedEvt, data)
 		if customMessage == nil || err != nil {
 			return
 		}
@@ -466,10 +456,6 @@ func (c *connection) ID() string {
 
 func (c *connection) Server() *Server {
 	return c.server
-}
-
-func (c *connection) Context() context.Context {
-	return c.ctx
 }
 
 func (c *connection) Values() ConnectionValues {

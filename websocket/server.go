@@ -6,6 +6,8 @@ import (
 	"github.com/kataras/iris/context"
 
 	"github.com/gorilla/websocket"
+	"net/http"
+	"webds/websocket/message"
 )
 
 type (
@@ -35,7 +37,7 @@ type (
 	// To serve the built'n javascript client-side library look the `websocket.ClientHandler`.
 	Server struct {
 		config                Config
-		messageSerializer     *messageSerializer
+		messageSerializer     *message.MessageSerializer
 		connections           sync.Map            // key = the Connection ID.
 		rooms                 map[string][]string // by default a connection is joined to a room which has the connection id as its name
 		mu                    sync.RWMutex        // for rooms.
@@ -54,7 +56,7 @@ func New(cfg Config) *Server {
 	cfg = cfg.Validate()
 	return &Server{
 		config:                cfg,
-		messageSerializer:     newMessageSerializer(cfg.EvtMessagePrefix),
+		messageSerializer:     message.NewMessageSerializer(cfg.EvtMessagePrefix),
 		connections:           sync.Map{}, // ready-to-use, this is not necessary.
 		rooms:                 make(map[string][]string),
 		onConnectionListeners: make([]ConnectionFunc, 0),
@@ -80,8 +82,11 @@ func New(cfg Config) *Server {
 // To serve the built'n javascript client-side library look the `websocket.ClientHandler`.
 func (s *Server) Handler() context.Handler {
 	return func(ctx context.Context) {
-		c := s.Upgrade(ctx)
-		if c.Err() != nil {
+		c := s.Upgrade(ctx.ResponseWriter(), ctx.Request(), ctx.ResponseWriter().Header())
+
+		if err := c.Err(); err != nil {
+			ctx.Application().Logger().Warnf("websocket error: %v\n", err)
+			ctx.StatusCode(503) // Status Service Unavailable
 			return
 		}
 		// NOTE TO ME: fire these first BEFORE startReader and startPinger
@@ -112,15 +117,22 @@ func (s *Server) Handler() context.Handler {
 // For a more high-level function use the `Handler()` and `OnConnecton` events.
 // This one does not starts the connection's writer and reader, so after your `On/OnMessage` events registration
 // the caller has to call the `Connection#Wait` function, otherwise the connection will be not handled.
-func (s *Server) Upgrade(ctx context.Context) Connection {
-	conn, err := s.upgrader.Upgrade(ctx.ResponseWriter(), ctx.Request(), ctx.ResponseWriter().Header())
+func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request, responseHeader http.Header) Connection {
+	conn, err := s.upgrader.Upgrade(w, r, responseHeader)
 	if err != nil {
-		ctx.Application().Logger().Warnf("websocket error: %v\n", err)
-		ctx.StatusCode(503) // Status Service Unavailable
+
 		return &connection{err: err}
 	}
+	cid := s.config.IDGenerator(r)
+	// create the new connection
+	c := newConnection(s, conn, cid)
+	// add the connection to the Server's list
+	s.addConnection(c)
 
-	return s.handleConnection(ctx, conn)
+	// join to itself
+	s.Join(c.id, c.id)
+
+	return c
 }
 
 func (s *Server) addConnection(c *connection) {
@@ -137,22 +149,6 @@ func (s *Server) getConnection(connID string) (*connection, bool) {
 	}
 
 	return nil, false
-}
-
-// wrapConnection wraps an underline connection to an iris websocket connection.
-// It does NOT starts its writer, reader and event mux, the caller is responsible for that.
-func (s *Server) handleConnection(ctx context.Context, websocketConn UnderlineConnection) *connection {
-	// use the config's id generator (or the default) to create a websocket client/connection id
-	cid := s.config.IDGenerator(ctx)
-	// create the new connection
-	c := newConnection(ctx, s, websocketConn, cid)
-	// add the connection to the Server's list
-	s.addConnection(c)
-
-	// join to itself
-	s.Join(c.id, c.id)
-
-	return c
 }
 
 /* Notes:
