@@ -6,8 +6,8 @@ import (
 	"github.com/kataras/iris/context"
 
 	"github.com/gorilla/websocket"
+	"github.com/lightjiang/webds/websocket/message"
 	"net/http"
-	"webds/websocket/message"
 )
 
 type (

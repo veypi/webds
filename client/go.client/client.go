@@ -4,11 +4,11 @@ import (
 	"bytes"
 	"github.com/gorilla/websocket"
 	"github.com/kataras/golog"
+	"github.com/lightjiang/webds/websocket/message"
 	"net"
 	"strconv"
 	"sync"
 	"time"
-	"webds/websocket/message"
 )
 
 const (

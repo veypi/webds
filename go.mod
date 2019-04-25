@@ -1,4 +1,4 @@
-module webds
+module github.com/lightjiang/webds
 
 go 1.12
 
