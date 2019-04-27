@@ -81,10 +81,10 @@ func New(cfg Config) *Server {
 // For a more high-level function use the `Handler()` and `OnConnecton` events.
 // This one does not starts the connection's writer and reader, so after your `On/OnMessage` events registration
 // the caller has to call the `Connection#Wait` function, otherwise the connection will be not handled.
-func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request, responseHeader http.Header) error {
+func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request, responseHeader http.Header) (*connection, error) {
 	conn, err := s.upgrader.Upgrade(w, r, responseHeader)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	cid := s.config.IDGenerator(r)
 	// create the new connection
@@ -97,9 +97,7 @@ func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request, responseHeader 
 	for i := range s.onConnectionListeners {
 		s.onConnectionListeners[i](c)
 	}
-
-	c.Wait()
-	return nil
+	return c, nil
 }
 
 func (s *Server) addConnection(c *connection) {
