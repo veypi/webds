@@ -6,6 +6,7 @@ import (
 	"github.com/kataras/golog"
 	"github.com/lightjiang/webds/websocket/message"
 	"net"
+	"net/url"
 	"strconv"
 	"sync"
 	"time"
@@ -69,6 +70,8 @@ type (
 		Key string
 		// URL is the target
 		URL string
+
+		Path string
 		// ID used to create the client id
 		ID string
 		// EvtMessagePrefix prefix of the every message
@@ -214,13 +217,14 @@ func (c *connection) Close() error {
 
 func (c *connection) startConnect() {
 	for {
-		conn, _, err := websocket.DefaultDialer.Dial(c.config.URL+"?u_id="+c.id+"&key="+c.config.Key, nil)
+		u := url.URL{Scheme: "ws", Host: c.config.URL, Path: c.config.Path + "?u_id=" + c.id + "&key=" + c.config.Key}
+		conn, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
 		if err != nil {
-			golog.Warnf("connected failed. %s", err.Error())
+			golog.Warnf("connected failed %s . %s", u.String(), err.Error())
 			time.Sleep(10 * time.Second)
 		} else {
 			c.conn = conn
-			golog.Info("connected succeed.")
+			golog.Infof("connect %s succeed.", u.String())
 			break
 		}
 	}
