@@ -217,7 +217,7 @@ func (c *connection) Close() error {
 
 func (c *connection) startConnect() {
 	for {
-		u := url.URL{Scheme: "ws", Host: c.config.URL, Path: c.config.Path + "?u_id=" + c.id + "&key=" + c.config.Key}
+		u := url.URL{Scheme: "ws", Host: c.config.URL, Path: c.config.Path + "/" + c.id + "/" + c.config.Key}
 		conn, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
 		if err != nil {
 			golog.Warnf("connected failed %s . %s", u.String(), err.Error())
