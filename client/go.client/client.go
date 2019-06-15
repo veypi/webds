@@ -232,7 +232,7 @@ func (c *connection) startConnect() {
 
 func (c *connection) startPinger() {
 	pingHandler := func(s string) error {
-		err := c.conn.WriteControl(websocket.PongMessage, []byte(s), time.Now().Add(c.config.WriteTimeout))
+		err := c.conn.WriteControl(websocket.PongMessage, []byte(s), time.Now().Add(time.Second))
 		if err == websocket.ErrCloseSent {
 			return nil
 		} else if e, ok := err.(net.Error); ok && e.Temporary() {
@@ -277,9 +277,9 @@ func (c *connection) startReader() error {
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway) {
 				c.FireOnError(err)
+				golog.Errorf("read error: %s", err.Error())
+				return err
 			}
-			golog.Errorf("read error: %s", err.Error())
-			return err
 		}
 		c.messageReceive(data)
 	}
