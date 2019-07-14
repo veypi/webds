@@ -60,7 +60,7 @@ type (
 		FireOnError(err error)
 		OnMessage(NativeMessageFunc)
 		On(string, MessageFunc)
-		Wait()
+		Wait() error
 		Close() error
 		Emit(string, interface{}) error
 		EmitMessage([]byte) error
