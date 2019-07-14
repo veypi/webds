@@ -184,7 +184,6 @@ func (c *connection) init(conf *Config) {
 		c.messageType = websocket.BinaryMessage
 	}
 	c.id = conf.ID
-	c.startConnect()
 }
 func (c *connection) write(websocketMessageType int, data []byte) error {
 	c.writerMu.Lock()
@@ -406,20 +405,17 @@ func (c *connection) On(event string, cb MessageFunc) {
 // it's named as "Wait" because it should be called LAST,
 // after the "On" events IF server's `Upgrade` is used,
 // otherise you don't have to call it because the `Handler()` does it automatically.
-func (c *connection) Wait() {
+func (c *connection) Wait() error {
 	if c.started {
-		return
+		return nil
 	}
+	c.startConnect()
 	c.started = true
 	// start the ping
 	c.startPinger()
 
 	// start the messages reader
 	err := c.startReader()
-	if err != nil {
-		c.Close()
-		time.Sleep(time.Second * 3)
-		c.startConnect()
-		c.Wait()
-	}
+	c.Close()
+	return err
 }
