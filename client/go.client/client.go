@@ -280,7 +280,11 @@ func (c *connection) startReader() error {
 				return err
 			}
 		}
-		c.messageReceive(data)
+		if len(data) > 0 {
+			c.messageReceive(data)
+		} else {
+			return nil
+		}
 	}
 }
 
