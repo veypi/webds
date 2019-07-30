@@ -38,6 +38,7 @@ const (
 type (
 	// DisconnectFunc is the callback which is fired when the ws client closed.
 	DisconnectFunc func()
+	ConnectFunc    func()
 	// ErrorFunc is the callback which fires whenever an error occurs
 	ErrorFunc (func(error))
 	// NativeMessageFunc is the callback for native websocket messages, receives one []byte parameter which is the raw client's message
@@ -54,6 +55,7 @@ type (
 	Connection interface {
 		ID() string
 		OnDisconnect(DisconnectFunc)
+		OnConnect(ConnectFunc)
 		OnError(ErrorFunc)
 		OnPing(PingFunc)
 		OnPong(PongFunc)
@@ -143,10 +145,11 @@ func (c *Config) Validate() {
 }
 
 // New create a new websocket client
-func New(conf *Config) *connection {
+func New(conf *Config) Connection {
 	c := &connection{
 		messageType:              websocket.TextMessage,
 		onDisconnectListeners:    make([]DisconnectFunc, 0),
+		onConnectListeners:       make([]ConnectFunc, 0),
 		onErrorListeners:         make([]ErrorFunc, 0),
 		onNativeMessageListeners: make([]NativeMessageFunc, 0),
 		onEventListeners:         make(map[string][]MessageFunc, 0),
@@ -168,6 +171,7 @@ type connection struct {
 	messageType              int
 	disconnected             bool
 	onDisconnectListeners    []DisconnectFunc
+	onConnectListeners       []ConnectFunc
 	onErrorListeners         []ErrorFunc
 	onPingListeners          []PingFunc
 	onPongListeners          []PongFunc
@@ -224,6 +228,7 @@ func (c *connection) startConnect() {
 		} else {
 			c.conn = conn
 			golog.Infof("connect %s succeed.", u.String())
+			c.fireConnect()
 			break
 		}
 	}
@@ -280,7 +285,11 @@ func (c *connection) startReader() error {
 				return err
 			}
 		}
-		c.messageReceive(data)
+		if len(data) > 0 {
+			c.messageReceive(data)
+		} else {
+			return nil
+		}
 	}
 }
 
@@ -337,6 +346,10 @@ func (c *connection) OnDisconnect(cb DisconnectFunc) {
 	c.onDisconnectListeners = append(c.onDisconnectListeners, cb)
 }
 
+func (c *connection) OnConnect(cb ConnectFunc) {
+	c.onConnectListeners = append(c.onConnectListeners, cb)
+}
+
 func (c *connection) OnError(cb ErrorFunc) {
 	c.onErrorListeners = append(c.onErrorListeners, cb)
 }
@@ -358,8 +371,15 @@ func (c *connection) FireOnError(err error) {
 
 func (c *connection) fireDisconnect() {
 	golog.Debugf("disconnected.")
-	for i := range c.onDisconnectListeners {
-		c.onDisconnectListeners[i]()
+	for _, fc := range c.onDisconnectListeners {
+		fc()
+	}
+}
+
+func (c *connection) fireConnect() {
+	golog.Debugf("connected.")
+	for _, fc := range c.onConnectListeners {
+		fc()
 	}
 }
 
