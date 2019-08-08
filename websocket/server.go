@@ -304,6 +304,15 @@ func (s *Server) GetConnectionsByRoom(roomName string) []Connection {
 	return conns
 }
 
+func (s *Server) Broadcast(to string, evt string, data interface{}) error {
+	message, err := s.messageSerializer.Serialize(evt, data)
+	if err != nil {
+		return err
+	}
+	s.emitMessage("", to, message)
+	return nil
+}
+
 // emitMessage is the main 'router' of the messages coming from the connection
 // this is the main function which writes the RAW websocket messages to the client.
 // It sends them(messages) to the correct room (self, broadcast or to specific client)
