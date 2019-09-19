@@ -85,7 +85,9 @@ var (
 // returns the  string form of the message
 // Supported data types are: string, int, bool, bytes and JSON.
 func (ms *MessageSerializer) Serialize(event string, data interface{}) ([]byte, error) {
-	b := ms.buf.Get()
+	// bytebufferpool. 有bug 线程不安全
+	//b := ms.buf.Get()
+	b := &bytes.Buffer{}
 	b.Write(ms.prefix)
 	b.WriteString(event)
 	b.WriteByte(messageSeparatorByte)
@@ -123,7 +125,9 @@ func (ms *MessageSerializer) Serialize(event string, data interface{}) ([]byte, 
 	}
 
 	message := b.Bytes()
-	ms.buf.Put(b)
+	//ms.buf.Put(b)
+	b.Reset()
+	b = nil
 
 	return message, nil
 }
