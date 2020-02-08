@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"github.com/gorilla/websocket"
 	"github.com/kataras/golog"
-	"github.com/lightjiang/webds/websocket/message"
+	"github.com/lightjiang/webds/message"
 	"net"
 	"net/url"
 	"strconv"
@@ -162,7 +162,7 @@ func New(conf *Config) Connection {
 }
 
 type connection struct {
-	messageSerializer *message.MessageSerializer
+	messageSerializer *message.Serializer
 	id                string
 	writerMu          sync.Mutex
 	conn              *websocket.Conn
@@ -182,7 +182,7 @@ type connection struct {
 
 func (c *connection) init(conf *Config) {
 	c.config = conf
-	c.messageSerializer = message.NewMessageSerializer(c.config.EvtMessagePrefix)
+	c.messageSerializer = message.NewSerializer(c.config.EvtMessagePrefix)
 	// will keep connecting to server
 	if c.config.BinaryMessages {
 		c.messageType = websocket.BinaryMessage
@@ -295,13 +295,13 @@ func (c *connection) startReader() error {
 
 func (c *connection) messageReceive(data []byte) {
 	if bytes.HasPrefix(data, c.config.EvtMessagePrefix) {
-		evt := c.messageSerializer.GetWebsocketCustomEvent(data)
+		evt := c.messageSerializer.GetMsgTopic(data)
 		listeners, ok := c.onEventListeners[string(evt)]
 		if !ok || len(listeners) == 0 {
 			golog.Warnf("received data but no func handle it: %s", evt)
 			return
 		}
-		message, err := c.messageSerializer.Deserialize(evt, data)
+		message, err := c.messageSerializer.Deserialize(evt.String(), data)
 		if message == nil || err != nil {
 			golog.Warnf("received blank data or deserialize failed for %v", err)
 			return

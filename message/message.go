@@ -2,21 +2,23 @@ package message
 
 import (
 	"bytes"
-	"encoding/binary"
-	"encoding/json"
+	"github.com/json-iterator/go"
 	"strconv"
+	"strings"
+	"sync"
 
 	"errors"
 	"fmt"
-	"github.com/valyala/bytebufferpool"
 )
 
+var json = jsoniter.ConfigFastest
+
 type (
-	messageType uint8
+	messageType string
 )
 
 func (m messageType) String() string {
-	return strconv.Itoa(int(m))
+	return string(m)
 }
 
 func (m messageType) Name() string {
@@ -38,20 +40,64 @@ func (m messageType) Name() string {
 
 // The same values are exists on client side too.
 const (
-	messageTypeString messageType = iota
-	messageTypeInt
-	messageTypeBool
-	messageTypeBytes
-	messageTypeJSON
+	messageTypeString messageType = "0"
+	messageTypeInt    messageType = "1"
+	messageTypeBool   messageType = "2"
+	messageTypeBytes  messageType = "3"
+	messageTypeJSON   messageType = "4"
 )
 
 const (
 	messageSeparator = ";"
 )
 
+type Topic string
+
+func (t Topic) String() string {
+	return string(t)
+}
+
+func (t Topic) FirstFragment() string {
+	return t.Fragment(0)
+}
+
+func (t Topic) Fragment(count uint) string {
+	var res string
+	var tempCount uint
+	for _, i := range strings.TrimPrefix(t.String(), "/") {
+		if i == '/' {
+			if tempCount == count {
+				break
+			}
+			tempCount++
+		} else if tempCount == count {
+			res += string(i)
+		}
+	}
+	return res
+}
+
+func (t Topic) Since(count int) string {
+	var index int
+	var tempCount int
+	if t.String()[0] == '/' {
+		tempCount = -1
+	}
+	for i, v := range t.String() {
+		if v == '/' {
+			if tempCount == count {
+				break
+			}
+			tempCount++
+			index = i + 1
+		}
+	}
+	return t.String()[index:]
+}
+
 var messageSeparatorByte = messageSeparator[0]
 
-type MessageSerializer struct {
+type Serializer struct {
 	prefix []byte
 
 	prefixLen       int
@@ -60,19 +106,22 @@ type MessageSerializer struct {
 	prefixIdx       int
 	separatorIdx    int
 
-	buf *bytebufferpool.Pool
+	buf sync.Pool
 }
 
-func NewMessageSerializer(messagePrefix []byte) *MessageSerializer {
-	return &MessageSerializer{
+func NewSerializer(messagePrefix []byte) *Serializer {
+	return &Serializer{
 		prefix:          messagePrefix,
 		prefixLen:       len(messagePrefix),
 		separatorLen:    len(messageSeparator),
 		prefixAndSepIdx: len(messagePrefix) + len(messageSeparator) - 1,
 		prefixIdx:       len(messagePrefix) - 1,
 		separatorIdx:    len(messageSeparator) - 1,
-
-		buf: new(bytebufferpool.Pool),
+		buf: sync.Pool{
+			New: func() interface{} {
+				return &bytes.Buffer{}
+			},
+		},
 	}
 }
 
@@ -84,10 +133,9 @@ var (
 // websocketMessageSerialize serializes a custom websocket message from websocketServer to be delivered to the client
 // returns the  string form of the message
 // Supported data types are: string, int, bool, bytes and JSON.
-func (ms *MessageSerializer) Serialize(event string, data interface{}) ([]byte, error) {
-	// bytebufferpool. 有bug 线程不安全
-	//b := ms.buf.Get()
-	b := &bytes.Buffer{}
+func (ms *Serializer) Serialize(event string, data interface{}) ([]byte, error) {
+	b := ms.buf.Get().(*bytes.Buffer)
+	//b := &bytes.Buffer{}
 	b.Write(ms.prefix)
 	b.WriteString(event)
 	b.WriteByte(messageSeparatorByte)
@@ -100,7 +148,7 @@ func (ms *MessageSerializer) Serialize(event string, data interface{}) ([]byte, 
 	case int:
 		b.WriteString(messageTypeInt.String())
 		b.WriteByte(messageSeparatorByte)
-		binary.Write(b, binary.LittleEndian, v)
+		b.WriteString(strconv.Itoa(v))
 	case bool:
 		b.WriteString(messageTypeBool.String())
 		b.WriteByte(messageSeparatorByte)
@@ -125,32 +173,25 @@ func (ms *MessageSerializer) Serialize(event string, data interface{}) ([]byte, 
 	}
 
 	message := b.Bytes()
-	//ms.buf.Put(b)
 	b.Reset()
-	b = nil
-
+	ms.buf.Put(b)
 	return message, nil
 }
 
-var errInvalidTypeMessage = errors.New("Type %s is invalid for message: %s")
-
 // deserialize deserializes a custom websocket message from the client
-// ex: go-websocket-message;chat;4;themarshaledstringfromajsonstruct will return 'hello' as string
+// such as  prefix:topic;0:abc_msg
 // Supported data types are: string, int, bool, bytes and JSON.
-func (ms *MessageSerializer) Deserialize(event []byte, websocketMessage []byte) (interface{}, error) {
+func (ms *Serializer) Deserialize(event string, websocketMessage []byte) (interface{}, error) {
 	dataStartIdx := ms.prefixAndSepIdx + len(event) + 3
 	if len(websocketMessage) <= dataStartIdx {
 		return nil, errors.New("websocket invalid message: " + string(websocketMessage))
 	}
 
-	typ, err := strconv.Atoi(string(websocketMessage[ms.prefixAndSepIdx+len(event)+1 : ms.prefixAndSepIdx+len(event)+2])) // in order to go-websocket-message;user;-> 4
-	if err != nil {
-		return nil, err
-	}
+	typ := messageType(websocketMessage[ms.prefixAndSepIdx+len(event)+1 : ms.prefixAndSepIdx+len(event)+2]) // in order to go-websocket-message;user;-> 4
 
-	data := websocketMessage[dataStartIdx:] // in order to go-websocket-message;user;4; -> themarshaledstringfromajsonstruct
+	data := websocketMessage[dataStartIdx:]
 
-	switch messageType(typ) {
+	switch typ {
 	case messageTypeString:
 		return string(data), nil
 	case messageTypeInt:
@@ -172,16 +213,15 @@ func (ms *MessageSerializer) Deserialize(event []byte, websocketMessage []byte) 
 		//err := json.Unmarshal(data, &msg)
 		//return msg, err
 	default:
-		return nil, errors.New(fmt.Sprintf("Type %s is invalid for message: %s", messageType(typ).Name(), websocketMessage))
+		return nil, errors.New(fmt.Sprintf("Type %s is invalid for message: %s", typ.Name(), websocketMessage))
 	}
 }
 
 // getWebsocketCustomEvent return empty string when the websocketMessage is native message
-func (ms *MessageSerializer) GetWebsocketCustomEvent(websocketMessage []byte) []byte {
+func (ms *Serializer) GetMsgTopic(websocketMessage []byte) Topic {
 	if len(websocketMessage) < ms.prefixAndSepIdx {
-		return nil
+		return ""
 	}
 	s := websocketMessage[ms.prefixAndSepIdx:]
-	evt := s[:bytes.IndexByte(s, messageSeparatorByte)]
-	return evt
+	return Topic(s[:bytes.IndexByte(s, messageSeparatorByte)])
 }

@@ -1,8 +1,7 @@
-package websocket
+package webds
 
 import (
-	"github.com/iris-contrib/go.uuid"
-	"math/rand"
+	"github.com/rs/xid"
 	"net/http"
 	"time"
 )
@@ -25,22 +24,15 @@ const (
 	// DefaultEvtMessageKey is the default prefix of the underline websocket events
 	// that are being established under the hoods.
 	//
-	// Defaults to "iris-websocket-message:".
 	// Last character of the prefix should be ':'.
-	DefaultEvtMessageKey = "iris-websocket-message:"
+	DefaultEvtMessageKey = "ws:"
 )
 
-var (
-	// DefaultIDGenerator returns a random unique for a new connection.
-	// Used when config.IDGenerator is nil.
-	DefaultIDGenerator = func(r *http.Request) string {
-		id, err := uuid.NewV4()
-		if err != nil {
-			return randomString(64)
-		}
-		return id.String()
-	}
-)
+// DefaultIDGenerator returns a random unique for a new connection.
+// Used when config.IDGenerator is nil.
+func DefaultIDGenerator(*http.Request) string {
+	return xid.New().String()
+}
 
 // Config the websocket server configuration
 // all of these are optional.
@@ -55,7 +47,7 @@ type Config struct {
 	// with the message that the end-user receives.
 	// Do not change it unless it is absolutely necessary.
 	//
-	// If empty then defaults to []byte("iris-websocket-message:").
+	// If empty then defaults to []byte("ws:").
 	EvtMessagePrefix []byte
 	// Error is the function that will be fired if any client couldn't upgrade the HTTP connection
 	// to a websocket connection, a handshake error.
@@ -160,38 +152,4 @@ func (c Config) Validate() Config {
 	}
 
 	return c
-}
-
-const (
-	letterBytes   = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-	letterIdxBits = 6                    // 6 bits to represent a letter index
-	letterIdxMask = 1<<letterIdxBits - 1 // All 1-bits, as many as letterIdxBits
-	letterIdxMax  = 63 / letterIdxBits   // # of letter indices fitting in 63 bits
-)
-
-var src = rand.NewSource(time.Now().UnixNano())
-
-// random takes a parameter (int) and returns random slice of byte
-// ex: var randomstrbytes []byte; randomstrbytes = utils.Random(32)
-func random(n int) []byte {
-	b := make([]byte, n)
-	// A src.Int63() generates 63 random bits, enough for letterIdxMax characters!
-	for i, cache, remain := n-1, src.Int63(), letterIdxMax; i >= 0; {
-		if remain == 0 {
-			cache, remain = src.Int63(), letterIdxMax
-		}
-		if idx := int(cache & letterIdxMask); idx < len(letterBytes) {
-			b[i] = letterBytes[idx]
-			i--
-		}
-		cache >>= letterIdxBits
-		remain--
-	}
-
-	return b
-}
-
-// randomString accepts a number(10 for example) and returns a random string using simple but fairly safe random algorithm
-func randomString(n int) string {
-	return string(random(n))
 }
