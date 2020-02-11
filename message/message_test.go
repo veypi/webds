@@ -12,12 +12,13 @@ func TestSerializer(t *testing.T) {
 		4: []byte("abc"),
 		5: map[string]interface{}{"a": "abc"},
 	}
+	tp := NewTopic("home")
 	for i, d := range data {
-		res, err := s.Serialize("home", d)
+		res, err := s.Serialize(tp, d)
 		if err != nil {
 			t.Error(err)
 		}
-		r, err := s.Deserialize("home", res)
+		r, err := s.Deserialize(tp, res)
 		if err != nil {
 			t.Error(err)
 		}
@@ -35,13 +36,14 @@ func BenchmarkSerializer(b *testing.B) {
 	//data := 1234
 	var res []byte
 	var err error
+	tp := NewTopic("home")
 	for i := 0; i < b.N; i++ {
-		res, err = s.Serialize("home", data)
+		res, err = s.Serialize(tp, data)
 		if err != nil {
 			b.Error(err)
 			return
 		}
-		_, err = s.Deserialize("home", res)
+		_, err = s.Deserialize(tp, res)
 		if err != nil {
 			b.Error(err)
 			return
@@ -50,15 +52,17 @@ func BenchmarkSerializer(b *testing.B) {
 }
 
 func TestTopic(t *testing.T) {
-	topic := Topic("/asd/ss/123/2/435")
+	topic := NewTopic("/asd/ss/123/2/435")
 	if topic.FirstFragment() != "asd" {
 		t.Error("topic firstFragment called error")
 	}
 	if topic.Fragment(3) != "2" {
 		t.Error("topic Fragment called error: " + topic.Fragment(3))
 	}
-	if topic.Since(3) != "2/435" {
+	if topic.Since(3) != "/2/435" {
 		t.Error("topic Since called error")
 	}
-	t.Log(topic.Since(2))
+	if topic.Since(0) != "/asd/ss/123/2/435" {
+		t.Error(topic.Since(0))
+	}
 }

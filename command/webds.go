@@ -12,12 +12,22 @@ func main() {
 	app := cli.NewApp()
 	app.Version = webds.Version
 	app.Name = "webds"
-	app.Usage = "webds command tool"
+	app.Usage = "webds command tool, which is valid in server's host."
 	app.Flags = []cli.Flag{
 		cli.StringFlag{
 			Name:  "log_level",
 			Usage: "trace/debug/info/warn/error/fatal/panic, default is info level",
 			Value: "info",
+		},
+		cli.StringFlag{
+			Name:  "host",
+			Usage: "the server address, default is ws://127.0.0.1:8080",
+			Value: "ws://127.0.0.1:8080",
+		},
+		cli.StringFlag{
+			Name:  "id",
+			Usage: "the client id",
+			Value: "admin",
 		},
 	}
 	app.Commands = []cli.Command{

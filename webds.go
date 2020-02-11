@@ -1,8 +1,8 @@
 package webds
 
 import (
+	"context"
 	"errors"
-	"github.com/gorilla/websocket"
 	"github.com/lightjiang/utils/log"
 	"github.com/lightjiang/webds/message"
 	"github.com/lightjiang/webds/trie"
@@ -11,12 +11,13 @@ import (
 )
 
 const (
-	Version = "v0.1.0"
+	Version = "v0.2.0"
 )
 
 type ConnectionFunc func(Connection)
 
 type Server struct {
+	ctx                   context.Context
 	config                Config
 	messageSerializer     *message.Serializer
 	connections           sync.Map // key = the Connection ID.
@@ -24,37 +25,26 @@ type Server struct {
 	mu                    sync.RWMutex // for topics.
 	onConnectionListeners []ConnectionFunc
 	//connectionPool        sync.Pool // sadly we can't make this because the websocket connection is live until is closed.
-	upgrade websocket.Upgrader
 }
 
 func New(cfg Config) *Server {
 	cfg = cfg.Validate()
 	return &Server{
 		config:                cfg,
+		ctx:                   context.Background(),
 		messageSerializer:     message.NewSerializer(cfg.EvtMessagePrefix),
 		connections:           sync.Map{},
 		topics:                trie.New(),
 		mu:                    sync.RWMutex{},
 		onConnectionListeners: make([]ConnectionFunc, 0, 5),
-		upgrade: websocket.Upgrader{
-			HandshakeTimeout:  cfg.HandshakeTimeout,
-			ReadBufferSize:    cfg.ReadBufferSize,
-			WriteBufferSize:   cfg.WriteBufferSize,
-			Error:             cfg.Error,
-			CheckOrigin:       cfg.CheckOrigin,
-			Subprotocols:      cfg.Subprotocols,
-			EnableCompression: cfg.EnableCompression,
-		},
 	}
 }
-func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request, responseHeader http.Header) (*connection, error) {
-	conn, err := s.upgrade.Upgrade(w, r, responseHeader)
+func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (*connection, error) {
+	// create the new connection
+	c, err := acquireConn(s, w, r)
 	if err != nil {
 		return nil, err
 	}
-	cid := s.config.IDGenerator(r)
-	// create the new connection
-	c := acquireConn(s, conn, cid)
 	// add the connection to the Server's list
 	s.addConnection(c)
 
@@ -155,14 +145,17 @@ func (s *Server) GetConnectionsByTopic(topic string) []Connection {
 
 func (s *Server) Disconnect(id string) error {
 	if conn := s.GetConnection(id); conn != nil {
-		return conn.Disconnect()
+		return conn.Disconnect(nil)
 	}
 	return nil
 }
 
 func (s *Server) Broadcast(topic trie.Trie, msg []byte) error {
-	if topic != nil {
+	if topic == nil {
 		return errors.New("topic not exist")
+	}
+	if topic.IDs() == nil {
+		return nil
 	}
 	var e error
 	for _, id := range topic.IDs() {
@@ -170,7 +163,7 @@ func (s *Server) Broadcast(topic trie.Trie, msg []byte) error {
 		if conn != nil {
 			_, e = conn.Write(msg)
 			if e != nil {
-				log.Info().Err(conn.Disconnect()).Err(e).Msg("broadcast msg failed with " + conn.id)
+				log.Info().Err(conn.Disconnect(e)).Err(e).Msg("broadcast msg failed with " + conn.id)
 				e = nil
 			}
 		}

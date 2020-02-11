@@ -29,9 +29,13 @@ referring to github.com/kataras/iris
 - 命令行工具设计
 
         参照ros命令行设计：形如
-            - webds topic list/pub/echo
+            - webds topic list/pub/sub
 
 ## TODO
+
+- client/go/py/js
+
+- command tools
 
 - 分布式，选举产生中心通信节点
 
@@ -40,4 +44,6 @@ referring to github.com/kataras/iris
 
 ## update
 
-- 0.1.0 old version just a websocket server
+- v0.2.0 基于topic订阅机制初步重构完 server， go.client，command tool
+
+- v0.1.0 old version just a websocket server

@@ -1,6 +1,7 @@
 package trie
 
 import (
+	"sort"
 	"strings"
 	"sync"
 )
@@ -35,23 +36,25 @@ type trie struct {
 }
 
 func (t *trie) String() string {
-	return "\n/" + strings.Join(t.string(), "\n")
+	res := t.string()
+	if len(res) == 0 {
+		return ""
+	}
+	sort.Strings(res)
+	return strings.Join(res, "\n")
 }
 
 func (t *trie) string() []string {
-	fc := func(res []string, subt *trie) []string {
-		if subt != nil {
-			for _, s := range subt.string() {
-				res = append(res, "|...."+s)
+	res := make([]string, 0, 10)
+	if t.ids != nil && len(t.ids) != 0 {
+		res = append(res, t.AbsPath())
+	}
+	for _, subT := range t.subTrie {
+		if subT != nil {
+			for _, s := range subT.string() {
+				res = append(res, s)
 			}
 		}
-		return res
-	}
-	res := make([]string, 0, 10)
-	item := t.AbsPath()
-	res = append(res, item)
-	for _, subT := range t.subTrie {
-		res = fc(res, subT)
 	}
 	return res
 }
