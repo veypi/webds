@@ -28,18 +28,6 @@ func (t *testHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	conn.Wait()
 }
 
-func TestDefaultIDGenerator(t *testing.T) {
-	for i := 0; i < 5; i++ {
-		t.Log(DefaultIDGenerator(nil))
-	}
-}
-
-func BenchmarkDefaultIDGenerator(b *testing.B) {
-	for i := 0; i < b.N; i++ {
-		DefaultIDGenerator(nil)
-	}
-}
-
 func TestNew(t *testing.T) {
 	log.SetLevel(log.TraceLevel)
 	log.Info().Msg("start webds server")

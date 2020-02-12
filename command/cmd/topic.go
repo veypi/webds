@@ -129,7 +129,7 @@ func runList(c *cli.Context) error {
 		log.HandlerErrs(conn.Pub(message.TopicGetAllTopics.String(), ""))
 	})
 	conn.Subscribe(message.TopicGetAllTopics.String(), func(data string) {
-		fmt.Print(data + "\n")
+		fmt.Print(data)
 		conn.Close()
 	})
 	return conn.Wait()

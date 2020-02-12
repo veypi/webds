@@ -110,14 +110,23 @@ func acquireConn(s *Server, w http.ResponseWriter, r *http.Request) (*connection
 		return nil, err
 	}
 	c := connPool.Get().(*connection)
-	c.request = r
-	c.ctx = s.ctx
-	c.underline = conn
-	c.server = s
 	c.id = s.config.IDGenerator(r)
+	c.server = s
+	c.ctx = s.ctx
+	c.request = r
+	c.underline = conn
 	c.messageType = websocket.MessageText
 	if s.config.BinaryMessages {
 		c.messageType = websocket.MessageBinary
+	}
+	_, ok := s.addConnection(c)
+	if !ok {
+		log.HandlerErrs(c.echo(message.TopicAuth, ErrDuplicatedClient.Error()))
+		log.HandlerErrs(c.underline.Close(websocket.StatusNormalClosure, ""))
+		releaseConn(c)
+		return nil, ErrDuplicatedClient
+	} else {
+		log.HandlerErrs(c.echo(message.TopicAuth, "pass"))
 	}
 	c.onDisconnectListeners = make([]DisconnectFunc, 0)
 	c.onErrorListeners = make([]ErrorFunc, 0)
@@ -129,6 +138,7 @@ func acquireConn(s *Server, w http.ResponseWriter, r *http.Request) (*connection
 }
 
 func releaseConn(c *connection) {
+	c.id = ""
 	connPool.Put(c)
 }
 
@@ -225,8 +235,6 @@ func (c *connection) startReader() {
 
 }
 
-var UnformedMsg = errors.New("unformed Msg")
-
 // messageReceived checks the incoming message and fire the nativeMessage listeners or the event listeners (ws custom message)
 func (c *connection) messageReceived(data []byte) error {
 
@@ -257,10 +265,27 @@ func (c *connection) messageReceived(data []byte) error {
 				c.server.CancelAll(c.id)
 			case message.TopicGetAllTopics.String():
 				res := c.server.topics.String()
+				if res != "" {
+					res += "\n"
+				}
 				for i := range c.onTopicListeners {
-					res += "\n" + i
+					res += i + "\n"
 				}
 				log.HandlerErrs(c.echo(message.TopicGetAllTopics, res))
+			case message.TopicGetAllNodes.String():
+				res := ""
+				c.server.connections.Range(func(key, value interface{}) bool {
+					res += key.(string) + "\n"
+					return true
+				})
+				log.HandlerErrs(c.echo(message.TopicGetAllNodes, res))
+			case message.TopicStopNode.String():
+				conn := c.server.GetConnection(customMessage.(string))
+				if conn != nil {
+					log.HandlerErrs(conn.echo(message.TopicAuth, "exit"), conn.Disconnect(nil))
+				}
+			default:
+				log.Warn().Err(message.ErrUnformedMsg).Msg(string(data))
 			}
 		case message.InnerTopic:
 			listeners, ok := c.onTopicListeners[topic.String()]
@@ -297,7 +322,7 @@ func (c *connection) messageReceived(data []byte) error {
 		return nil
 
 	} else {
-		return UnformedMsg
+		return message.ErrUnformedMsg
 	}
 }
 

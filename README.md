@@ -1,8 +1,6 @@
 # webds
 Distributed System with websocket
 
-referring to github.com/kataras/iris
-
 ## 设计
 
 - 整体结构
@@ -44,6 +42,6 @@ referring to github.com/kataras/iris
 
 ## update
 
+- v0.2.1 添加webds node list/stop 指令
 - v0.2.0 基于topic订阅机制初步重构完 server， go.client，command tool
-
 - v0.1.0 old version just a websocket server

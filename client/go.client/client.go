@@ -7,7 +7,6 @@ import (
 	"github.com/lightjiang/utils"
 	"io"
 	"net/http"
-
 	//"github.com/gorilla/websocket"
 	"github.com/lightjiang/utils/log"
 	"github.com/lightjiang/webds/message"
@@ -152,6 +151,7 @@ type connection struct {
 	messageType  websocket.MessageType
 	disconnected utils.SafeBool
 	started      utils.SafeBool
+	auth         utils.FastLocker
 
 	onDisconnectListeners []DisconnectFunc
 	onConnectListeners    []ConnectFunc
@@ -171,6 +171,8 @@ func (c *connection) init(conf *Config) {
 	c.id = conf.ID
 }
 func (c *connection) write(websocketMessageType websocket.MessageType, data []byte) error {
+	c.auth.Lock()
+	defer c.auth.Unlock()
 	if c.started.IfTrue() {
 		return c.conn.Write(c.ctx, websocketMessageType, data)
 	} else {
@@ -201,7 +203,6 @@ func (c *connection) startConnect() error {
 		return err
 	}
 	c.conn = conn
-	c.fireConnect()
 	return nil
 }
 
@@ -249,14 +250,33 @@ func (c *connection) messageReceive(data []byte) {
 			log.Warn().Err(message.InvalidMessage).Msg(string(data))
 			return
 		}
-		listeners, ok := c.onTopicListeners[evt.String()]
-		if !ok || len(listeners) == 0 {
-			log.Warn().Msg("received data but no func handle it")
-			return
-		}
 		msg, err := c.messageSerializer.Deserialize(evt, data)
 		if err != nil {
 			log.Warn().Err(err).Msg(string(data))
+			return
+		}
+		if message.IsSysTopic(evt) {
+			switch evt.String() {
+			case message.TopicSysLog.String():
+				log.Info().Interface("msg", msg).Msg("")
+				return
+			case message.TopicAuth.String():
+				if s, ok := msg.(string); ok && s == "pass" {
+					c.auth.Unlock()
+					log.Debug().Msg("auth pass")
+					c.fireConnect()
+				} else if s == "exit" {
+					log.Info().Msg(s)
+				} else {
+					log.Warn().Interface("msg", msg).Msg("")
+					log.HandlerErrs(c.Close())
+				}
+				return
+			}
+		}
+		listeners, ok := c.onTopicListeners[evt.String()]
+		if !ok || len(listeners) == 0 {
+			log.Warn().Msg("received data but no func handle it")
 			return
 		}
 		for i := range listeners {
@@ -376,6 +396,7 @@ func (c *connection) subscribe(topic message.Topic) {
 // otherwise you don't have to call it because the `Handler()` does it automatically.
 func (c *connection) Wait() error {
 	if c.started.SetTrue() {
+		c.auth.Lock()
 		err := c.startConnect()
 		if err != nil {
 			return err

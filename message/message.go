@@ -22,11 +22,16 @@ var (
 	TopicSubscribe    = NewTopic("/sys/subscribe")
 	TopicCancel       = NewTopic("/sys/cancel")
 	TopicCancelAll    = NewTopic("/sys/cancel_all")
-	TopicGetAllTopics = NewTopic("/sys/admin/GetAllTopics")
+	TopicGetAllTopics = NewTopic("/sys/admin/get_all_topics")
+	TopicGetAllNodes  = NewTopic("/sys/admin/get_all_nodes")
+	TopicStopNode     = NewTopic("/sys/admin/stop_node")
+	TopicSysLog       = NewTopic("/sys/log")
+	TopicAuth         = NewTopic("/sys/auth")
 )
 
 var (
 	ErrNotAllowedTopic = errors.New("this topic is not allowed to subscribe or publish")
+	ErrUnformedMsg     = errors.New("unformed Msg")
 )
 
 func TypeofTopic(t Topic) string {

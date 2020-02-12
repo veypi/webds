@@ -45,17 +45,15 @@ func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (*connection, e
 	if err != nil {
 		return nil, err
 	}
-	// add the connection to the Server's list
-	s.addConnection(c)
-
 	for i := range s.onConnectionListeners {
 		s.onConnectionListeners[i](c)
 	}
 	return c, nil
 }
 
-func (s *Server) addConnection(c *connection) {
-	s.connections.Store(c.id, c)
+func (s *Server) addConnection(c *connection) (*connection, bool) {
+	conn, loaded := s.connections.LoadOrStore(c.id, c)
+	return conn.(*connection), !loaded
 }
 
 func (s *Server) GetConnection(id string) *connection {

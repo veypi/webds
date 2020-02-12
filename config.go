@@ -30,7 +30,11 @@ const (
 
 // DefaultIDGenerator returns a random unique for a new connection.
 // Used when config.IDGenerator is nil.
-func DefaultIDGenerator(*http.Request) string {
+func DefaultIDGenerator(r *http.Request) string {
+	id := r.Header.Get("id")
+	if len(id) != 0 {
+		return id
+	}
 	return xid.New().String()
 }
 

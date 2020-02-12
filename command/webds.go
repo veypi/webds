@@ -32,9 +32,11 @@ func main() {
 	}
 	app.Commands = []cli.Command{
 		cmd.Topic,
+		cmd.Node,
 	}
 	app.Before = func(c *cli.Context) error {
 		logLevel := c.String("log_level")
+		log.DisableCaller()
 		if l, err := log.ParseLevel(logLevel); err != nil {
 			log.Warn().Str("level", logLevel).Msg("log level is not right")
 		} else {
