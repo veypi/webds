@@ -10,23 +10,38 @@ import (
 	"errors"
 )
 
+type (
+	// A callback which should receives one parameter of type string, int, bool or any valid JSON/Go struct
+	Func        interface{}
+	FuncInt     = func(int)
+	FuncString  = func(string)
+	FuncBlank   = func()
+	FuncBytes   = func([]byte)
+	FuncBool    = func(bool)
+	FuncDefault = func(interface{})
+)
+
 var json = jsoniter.ConfigFastest
 
 const (
 	PublicTopic = ""
-	InnerTopic  = "inner"
-	SysTopic    = "sys"
+	// 用户保留主题 不会进行广播
+	InnerTopic = "inner"
+	// 系统保留主题 不会触发任何注册的回调函数
+	SysTopic = "sys"
 )
 
 var (
-	TopicSubscribe    = NewTopic("/sys/subscribe")
-	TopicCancel       = NewTopic("/sys/cancel")
-	TopicCancelAll    = NewTopic("/sys/cancel_all")
+	TopicSubscribe = NewTopic("/sys/subscribe")
+	TopicCancel    = NewTopic("/sys/cancel")
+	TopicCancelAll = NewTopic("/sys/cancel_all")
+	// 敏感操作 仅来自127.0.0.1的节点通过判定
 	TopicGetAllTopics = NewTopic("/sys/admin/get_all_topics")
 	TopicGetAllNodes  = NewTopic("/sys/admin/get_all_nodes")
 	TopicStopNode     = NewTopic("/sys/admin/stop_node")
-	TopicSysLog       = NewTopic("/sys/log")
-	TopicAuth         = NewTopic("/sys/auth")
+
+	TopicSysLog = NewTopic("/sys/log")
+	TopicAuth   = NewTopic("/sys/auth")
 )
 
 var (
@@ -118,24 +133,24 @@ func (t topic) Since(count int) string {
 }
 
 type (
-	messageType string
+	MsgType string
 )
 
-func (m messageType) String() string {
+func (m MsgType) String() string {
 	return string(m)
 }
 
-func (m messageType) Name() string {
+func (m MsgType) Name() string {
 	switch m {
-	case messageTypeString:
+	case MsgTypeString:
 		return "string"
-	case messageTypeInt:
+	case MsgTypeInt:
 		return "int"
-	case messageTypeBool:
+	case MsgTypeBool:
 		return "bool"
-	case messageTypeBytes:
+	case MsgTypeBytes:
 		return "[]byte"
-	case messageTypeJSON:
+	case MsgTypeJSON:
 		return "json"
 	default:
 		return "Invalid(" + m.String() + ")"
@@ -144,11 +159,11 @@ func (m messageType) Name() string {
 
 // The same values are exists on client side too.
 const (
-	messageTypeString messageType = "0"
-	messageTypeInt    messageType = "1"
-	messageTypeBool   messageType = "2"
-	messageTypeBytes  messageType = "3"
-	messageTypeJSON   messageType = "4"
+	MsgTypeString MsgType = "0"
+	MsgTypeInt    MsgType = "1"
+	MsgTypeBool   MsgType = "2"
+	MsgTypeBytes  MsgType = "3"
+	MsgTypeJSON   MsgType = "4"
 )
 
 const (
@@ -204,15 +219,15 @@ func (ms *Serializer) Serialize(t Topic, data interface{}) ([]byte, error) {
 
 	switch v := data.(type) {
 	case string:
-		b.WriteString(messageTypeString.String())
+		b.WriteString(MsgTypeString.String())
 		b.WriteByte(messageSeparatorByte)
 		b.WriteString(v)
 	case int:
-		b.WriteString(messageTypeInt.String())
+		b.WriteString(MsgTypeInt.String())
 		b.WriteByte(messageSeparatorByte)
 		b.WriteString(strconv.Itoa(v))
 	case bool:
-		b.WriteString(messageTypeBool.String())
+		b.WriteString(MsgTypeBool.String())
 		b.WriteByte(messageSeparatorByte)
 		if v {
 			b.Write(boolTrueB)
@@ -220,7 +235,7 @@ func (ms *Serializer) Serialize(t Topic, data interface{}) ([]byte, error) {
 			b.Write(boolFalseB)
 		}
 	case []byte:
-		b.WriteString(messageTypeBytes.String())
+		b.WriteString(MsgTypeBytes.String())
 		b.WriteByte(messageSeparatorByte)
 		b.Write(v)
 	default:
@@ -229,7 +244,7 @@ func (ms *Serializer) Serialize(t Topic, data interface{}) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		b.WriteString(messageTypeJSON.String())
+		b.WriteString(MsgTypeJSON.String())
 		b.WriteByte(messageSeparatorByte)
 		b.Write(res)
 	}
@@ -243,40 +258,40 @@ func (ms *Serializer) Serialize(t Topic, data interface{}) ([]byte, error) {
 // deserialize deserializes a custom websocket message from the client
 // such as  prefix:topic;0:abc_msg
 // Supported data types are: string, int, bool, bytes and JSON.
-func (ms *Serializer) Deserialize(t Topic, websocketMessage []byte) (interface{}, error) {
+func (ms *Serializer) Deserialize(t Topic, websocketMessage []byte) (interface{}, MsgType, error) {
 	dataStartIdx := ms.prefixAndSepIdx + t.Len() + 3
 	if len(websocketMessage) < dataStartIdx {
-		return nil, InvalidMessage
+		return nil, MsgType(""), InvalidMessage
 	}
 
-	typ := messageType(websocketMessage[ms.prefixAndSepIdx+t.Len()+1 : ms.prefixAndSepIdx+t.Len()+2]) // in order to go-websocket-message;user;-> 4
+	typ := MsgType(websocketMessage[ms.prefixAndSepIdx+t.Len()+1 : ms.prefixAndSepIdx+t.Len()+2]) // in order to go-websocket-message;user;-> 4
 
 	data := websocketMessage[dataStartIdx:]
 
 	switch typ {
-	case messageTypeString:
-		return string(data), nil
-	case messageTypeInt:
+	case MsgTypeString:
+		return string(data), MsgTypeString, nil
+	case MsgTypeInt:
 		msg, err := strconv.Atoi(string(data))
 		if err != nil {
 			log.HandlerErrs(err)
-			return nil, InvalidMessage
+			return nil, MsgType(""), InvalidMessage
 		}
-		return msg, nil
-	case messageTypeBool:
+		return msg, MsgTypeInt, nil
+	case MsgTypeBool:
 		if bytes.Equal(data, boolTrueB) {
-			return true, nil
+			return true, MsgTypeBool, nil
 		}
-		return false, nil
-	case messageTypeBytes:
-		return data, nil
-	case messageTypeJSON:
-		return data, nil
+		return false, MsgTypeBool, nil
+	case MsgTypeBytes:
+		return data, MsgTypeBytes, nil
+	case MsgTypeJSON:
+		return data, MsgTypeJSON, nil
 		//var msg interface{}
 		//err := json.Unmarshal(data, &msg)
 		//return msg, err
 	default:
-		return nil, InvalidMessage
+		return nil, MsgType(""), InvalidMessage
 	}
 }
 

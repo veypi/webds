@@ -30,5 +30,5 @@ func (e *publisher) Pub(data interface{}) error {
 	if err != nil {
 		return err
 	}
-	return e.conn.server.Broadcast(e.trie, msg)
+	return e.conn.server.broadcast(e.trie, msg)
 }

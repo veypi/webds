@@ -10,7 +10,6 @@ import (
 	"io"
 	"net/http"
 	"nhooyr.io/websocket"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,32 +18,20 @@ import (
 type (
 	// DisconnectFunc is the callback which is fired when a client/connection closed
 	DisconnectFunc func()
-	// LeaveRoomFunc is the callback which is fired when a client/connection leaves from any room.
-	// This is called automatically when client/connection disconnected
-	// (because websocket server automatically leaves from all joined rooms)
-	LeaveRoomFunc func(roomName string)
 	// ErrorFunc is the callback which fires whenever an error occurs
 	ErrorFunc func(error)
-	// A callback which should receives one parameter of type string, int, bool or any valid JSON/Go struct
-	MessageFunc interface{}
-	// PingFunc is the callback which fires each ping
-	PingFunc func()
-	// PongFunc is the callback which fires on pong message received
-	PongFunc func()
 	// Connection is the front-end API that you will use to communicate with the client side
 	Connection interface {
 		// ID returns the connection's identifier
 		ID() string
+
+		Request() *http.Request
 
 		// Server returns the websocket server instance
 		// which this connection is listening to.
 		//
 		// Its connection-relative operations are safe for use.
 		Server() *Server
-
-		// Write writes a raw websocket message with a specific type to the client
-		// used by ping messages and any CloseMessage types.
-		io.Writer
 
 		// OnDisconnect registers a callback which is fired when this connection is closed by an error or manual
 		OnDisconnect(DisconnectFunc)
@@ -55,14 +42,21 @@ type (
 		FireOnError(err error)
 		// To defines on which "topic" the server should send a message
 		// returns an Publisher to send messages.
+		// Broadcast to any node which subscribe this topic.
+		// 发布给订阅主题的所有节点
 		Publisher(string) Publisher
 		// On registers a callback to a particular topic which is fired when a message to this topic is received
 		// just for topic with prefix '/inner'
-		OnInner(string, MessageFunc)
+		// 注册某些话题的回调事件
+		On(topic string, callback message.Func)
+
+		// only send to the node of this conn
+		Echo(topic string, data interface{}) error
 
 		// subscribe registers this connection to a topic, if it doesn't exist then it creates a new.
 		// One topic can have one or more connections. One connection can subscribe many topics.
 		// All connections subscribe a topic specified by their `ID` automatically.
+		// 代替节点订阅主题, 可以配置节点是否有权限订阅主题
 		Subscribe(string)
 
 		IsSubscribe(string) bool
@@ -88,7 +82,7 @@ type (
 		disconnected          utils.SafeBool
 		onDisconnectListeners []DisconnectFunc
 		onErrorListeners      []ErrorFunc
-		onTopicListeners      map[string][]MessageFunc
+		onTopicListeners      map[string][]message.Func
 		subscribed            []string
 		// mu for self object write/read
 		selfMU  sync.RWMutex
@@ -98,26 +92,44 @@ type (
 	}
 )
 
+type RowConn = connection
+
 var _ Connection = &connection{}
 
 var connPool = sync.Pool{New: func() interface{} {
 	return &connection{}
 }}
 
+func NewConn(s *Server, w http.ResponseWriter, r *http.Request) (Connection, error) {
+	return acquireConn(s, w, r)
+}
+
 func acquireConn(s *Server, w http.ResponseWriter, r *http.Request) (*connection, error) {
-	conn, err := websocket.Accept(w, r, nil)
+	if !s.config.CheckOrigin(r) {
+		return nil, ErrOrigin
+	}
+	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+		Subprotocols:       nil,
+		InsecureSkipVerify: true,
+	})
 	if err != nil {
 		return nil, err
 	}
 	c := connPool.Get().(*connection)
 	c.id = s.config.IDGenerator(r)
 	c.server = s
+	c.underline = conn
 	c.ctx = s.ctx
 	c.request = r
-	c.underline = conn
 	c.messageType = websocket.MessageText
 	if s.config.BinaryMessages {
 		c.messageType = websocket.MessageBinary
+	}
+	if c.id == "" {
+		log.HandlerErrs(c.echo(message.TopicAuth, ErrID.Error()))
+		log.HandlerErrs(c.underline.Close(websocket.StatusNormalClosure, ""))
+		releaseConn(c)
+		return nil, ErrID
 	}
 	_, ok := s.addConnection(c)
 	if !ok {
@@ -130,7 +142,7 @@ func acquireConn(s *Server, w http.ResponseWriter, r *http.Request) (*connection
 	}
 	c.onDisconnectListeners = make([]DisconnectFunc, 0)
 	c.onErrorListeners = make([]ErrorFunc, 0)
-	c.onTopicListeners = make(map[string][]MessageFunc, 0)
+	c.onTopicListeners = make(map[string][]message.Func, 0)
 	c.subscribed = make([]string, 5)
 	c.started.ForceSetFalse()
 	c.disconnected.ForceSetFalse()
@@ -168,12 +180,6 @@ func (c *connection) write(websocketMessageType websocket.MessageType, data []by
 func (c *connection) Write(data []byte) (int, error) {
 	return c.write(c.messageType, data)
 }
-
-const (
-	// WriteWait is 1 second at the internal implementation,
-	// same as here but this can be changed at the future*
-	WriteWait = 1 * time.Second
-)
 
 func (c *connection) startPing() {
 	var err error
@@ -235,18 +241,16 @@ func (c *connection) startReader() {
 
 }
 
-// messageReceived checks the incoming message and fire the nativeMessage listeners or the event listeners (ws custom message)
 func (c *connection) messageReceived(data []byte) error {
 
 	if bytes.HasPrefix(data, c.server.config.EvtMessagePrefix) {
 		//it's a custom ws message
 		topic := c.server.messageSerializer.GetMsgTopic(data)
-		customMessage, err := c.server.messageSerializer.Deserialize(topic, data)
+		customMessage, msgType, err := c.server.messageSerializer.Deserialize(topic, data)
 		if err != nil {
 			return err
 		}
-		switch topic.FirstFragment() {
-		case message.SysTopic:
+		if message.IsSysTopic(topic) {
 			if topic.Fragment(1) == "admin" && !strings.HasPrefix(c.request.RemoteAddr, "127.0.0.1") {
 				log.Warn().Str("addr", c.request.RemoteAddr).Str("topic", topic.String()).Msg("receive invalid admin command")
 				return nil
@@ -287,37 +291,51 @@ func (c *connection) messageReceived(data []byte) error {
 			default:
 				log.Warn().Err(message.ErrUnformedMsg).Msg(string(data))
 			}
-		case message.InnerTopic:
+		} else {
 			listeners, ok := c.onTopicListeners[topic.String()]
 			if !ok || len(listeners) == 0 {
 				return nil // if not listeners for this event exit from here
 			}
-			for i := range listeners {
-				if fn, ok := listeners[i].(func()); ok { // its a simple func(){} callback
-					fn()
-				} else if fnString, ok := listeners[i].(func(string)); ok {
-
-					if msgString, is := customMessage.(string); is {
-						fnString(msgString)
-					} else if msgInt, is := customMessage.(int); is {
-						// here if server side waiting for string but client side sent an int, just convert this int to a string
-						fnString(strconv.Itoa(msgInt))
+			for _, item := range listeners {
+				doIt := false
+				switch cb := item.(type) {
+				case message.FuncBlank:
+					cb()
+				case message.FuncInt:
+					if msgType == message.MsgTypeInt {
+						cb(customMessage.(int))
+						doIt = true
 					}
-
-				} else if fnInt, ok := listeners[i].(func(int)); ok {
-					fnInt(customMessage.(int))
-				} else if fnBool, ok := listeners[i].(func(bool)); ok {
-					fnBool(customMessage.(bool))
-				} else if fnBytes, ok := listeners[i].(func([]byte)); ok {
-					fnBytes(customMessage.([]byte))
-				} else {
-					listeners[i].(func(interface{}))(customMessage)
+				case message.FuncString:
+					if msgType == message.MsgTypeString {
+						cb(customMessage.(string))
+						doIt = true
+					}
+				case message.FuncBytes:
+					if msgType == message.MsgTypeBytes || msgType == message.MsgTypeJSON {
+						cb(customMessage.([]byte))
+						doIt = true
+					}
+				case message.FuncBool:
+					if msgType == message.MsgTypeBool {
+						cb(customMessage.(bool))
+						doIt = true
+					}
+				case message.FuncDefault:
+					cb(customMessage)
+					doIt = true
+				default:
+					log.Warn().Str("id", c.id).Str("topic", topic.String()).Msg(" register a invalid callback func")
+					return nil
 				}
-
+				if !doIt {
+					log.Warn().Str("id", c.id).Str("topic", topic.String()).Msg("receive a msg but not find appropriate func to handle it")
+				}
 			}
-		default:
 			// TODO 广播权限验证
-			_ = c.server.Broadcast(c.server.topics.Match(topic.String()), data)
+			if message.IsPublicTopic(topic) {
+				_ = c.server.Broadcast(topic.String(), data)
+			}
 		}
 		return nil
 
@@ -354,11 +372,8 @@ func (c *connection) FireOnError(err error) {
 	}
 }
 
-func (c *connection) EchoInner(innerTopic string, data interface{}) error {
-	topic := message.NewTopic(innerTopic)
-	if topic.FirstFragment() != "inner" {
-		return message.ErrNotAllowedTopic
-	}
+func (c *connection) Echo(Topic string, data interface{}) error {
+	topic := message.NewTopic(Topic)
 	return c.echo(topic, data)
 }
 
@@ -371,14 +386,25 @@ func (c *connection) echo(t message.Topic, data interface{}) error {
 	return err
 }
 
-func (c *connection) OnInner(innerTopic string, cb MessageFunc) {
-	topic := message.NewTopic(innerTopic)
-	if topic.FirstFragment() != "inner" {
-		log.Warn().Err(message.ErrNotAllowedTopic).Msg(innerTopic)
+func (c *connection) On(Topic string, cb message.Func) {
+	topic := message.NewTopic(Topic)
+	if message.IsSysTopic(topic) {
+		log.Warn().Err(message.ErrNotAllowedTopic).Msg(Topic)
+		return
+	}
+	switch cb.(type) {
+	case message.FuncBlank:
+	case message.FuncInt:
+	case message.FuncString:
+	case message.FuncBytes:
+	case message.FuncDefault:
+	case message.FuncBool:
+	default:
+		log.Warn().Str("id", c.id).Str("topic", Topic).Msg(" register a invalid callback func")
 		return
 	}
 	if c.onTopicListeners[topic.String()] == nil {
-		c.onTopicListeners[topic.String()] = make([]MessageFunc, 0)
+		c.onTopicListeners[topic.String()] = make([]message.Func, 0)
 	}
 	c.onTopicListeners[topic.String()] = append(c.onTopicListeners[topic.String()], cb)
 }
@@ -440,4 +466,8 @@ func (c *connection) Disconnect(reason error) error {
 		return nil
 	}
 	return nil
+}
+
+func (c *connection) Request() *http.Request {
+	return c.request
 }

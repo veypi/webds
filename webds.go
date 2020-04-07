@@ -11,10 +11,10 @@ import (
 )
 
 const (
-	Version = "v0.2.1"
+	Version = "v0.2.2"
 )
 
-type ConnectionFunc func(Connection)
+type ConnectionFunc func(Connection) error
 
 type Server struct {
 	ctx                   context.Context
@@ -39,16 +39,21 @@ func New(cfg Config) *Server {
 		onConnectionListeners: make([]ConnectionFunc, 0, 5),
 	}
 }
-func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (*connection, error) {
+func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (Connection, error) {
 	// create the new connection
-	c, err := acquireConn(s, w, r)
+	c, err := s.config.NewConn(s, w, r)
 	if err != nil {
 		return nil, err
 	}
 	for i := range s.onConnectionListeners {
-		s.onConnectionListeners[i](c)
+		err = s.onConnectionListeners[i](c)
+		if err != nil {
+			c.Echo(message.TopicSysLog.String(), err.Error())
+			c.Disconnect(nil)
+			return nil, err
+		}
 	}
-	return c, nil
+	return c, err
 }
 
 func (s *Server) addConnection(c *connection) (*connection, bool) {
@@ -148,7 +153,15 @@ func (s *Server) Disconnect(id string) error {
 	return nil
 }
 
-func (s *Server) Broadcast(topic trie.Trie, msg []byte) error {
+func (s *Server) Broadcast(topic string, msg []byte) error {
+	t := s.topics.Match(topic)
+	if t == nil {
+		return errors.New("topic not exist")
+	}
+	return s.broadcast(t, msg)
+}
+
+func (s *Server) broadcast(topic trie.Trie, msg []byte) error {
 	if topic == nil {
 		return errors.New("topic not exist")
 	}

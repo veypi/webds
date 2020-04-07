@@ -11,16 +11,11 @@ import (
 	"github.com/lightjiang/utils/log"
 	"github.com/lightjiang/webds/message"
 	"nhooyr.io/websocket"
-	"strconv"
 	"sync"
 	"time"
 )
 
 const (
-	// DefaultWebsocketWriteTimeout 0, no timeout
-	DefaultWebsocketWriteTimeout = 0
-	// DefaultWebsocketReadTimeout 0, no timeout
-	DefaultWebsocketReadTimeout = 0
 	// DefaultWebsocketPongTimeout 60 * time.Second
 	DefaultWebsocketPongTimeout = 60 * time.Second
 	// DefaultWebsocketPingPeriod (DefaultPongTimeout * 9) / 10
@@ -45,15 +40,6 @@ type (
 	ConnectFunc    func()
 	// ErrorFunc is the callback which fires whenever an error occurs
 	ErrorFunc func(error)
-	// NativeMessageFunc is the callback for native websocket messages, receives one []byte parameter which is the raw client's message
-	NativeMessageFunc func([]byte)
-	// MessageFunc is the second argument to the Emitter's Emit functions.
-	// A callback which should receives one parameter of type string, int, bool or any valid JSON/Go struct
-	MessageFunc interface{}
-	// PingFunc is the callback which fires each ping
-	PingFunc func()
-	// PongFunc is the callback which fires on pong message received
-	PongFunc func(s string)
 	// Config websocket client config
 
 	Connection interface {
@@ -61,7 +47,7 @@ type (
 		OnDisconnect(DisconnectFunc)
 		OnConnect(ConnectFunc)
 		OnError(ErrorFunc)
-		Subscribe(string, MessageFunc)
+		Subscribe(string, message.Func)
 		Publisher(string) func(interface{}) error
 		Pub(string, interface{}) error
 		Echo(string, interface{}) error
@@ -133,7 +119,7 @@ func New(conf *Config) Connection {
 		onDisconnectListeners: make([]DisconnectFunc, 0),
 		onConnectListeners:    make([]ConnectFunc, 0),
 		onErrorListeners:      make([]ErrorFunc, 0),
-		onTopicListeners:      make(map[string][]MessageFunc, 0),
+		onTopicListeners:      make(map[string][]message.Func, 0),
 	}
 	conf.Validate()
 	c.init(conf)
@@ -156,7 +142,7 @@ type connection struct {
 	onDisconnectListeners []DisconnectFunc
 	onConnectListeners    []ConnectFunc
 	onErrorListeners      []ErrorFunc
-	onTopicListeners      map[string][]MessageFunc
+	onTopicListeners      map[string][]message.Func
 }
 
 func (c *connection) init(conf *Config) {
@@ -232,7 +218,7 @@ func (c *connection) startReader() error {
 				return nil
 			}
 			c.FireOnError(err)
-			log.Error().Err(err).Msg("read error")
+			log.Error().Msg("read error: " + err.Error())
 			return err
 		}
 		if len(data) > 0 {
@@ -250,7 +236,7 @@ func (c *connection) messageReceive(data []byte) {
 			log.Warn().Err(message.InvalidMessage).Msg(string(data))
 			return
 		}
-		msg, err := c.messageSerializer.Deserialize(evt, data)
+		customMessage, msgType, err := c.messageSerializer.Deserialize(evt, data)
 		if err != nil {
 			log.Warn().Err(err).Msg(string(data))
 			return
@@ -258,17 +244,17 @@ func (c *connection) messageReceive(data []byte) {
 		if message.IsSysTopic(evt) {
 			switch evt.String() {
 			case message.TopicSysLog.String():
-				log.Info().Interface("msg", msg).Msg("")
+				log.Info().Msgf("sys log : %s", customMessage)
 				return
 			case message.TopicAuth.String():
-				if s, ok := msg.(string); ok && s == "pass" {
+				if s, ok := customMessage.(string); ok && s == "pass" {
 					c.auth.Unlock()
 					log.Debug().Msg("auth pass")
 					c.fireConnect()
 				} else if s == "exit" {
 					log.Info().Msg(s)
 				} else {
-					log.Warn().Interface("msg", msg).Msg("")
+					log.Warn().Interface("customMessage", customMessage).Msg("")
 					log.HandlerErrs(c.Close())
 				}
 				return
@@ -279,26 +265,44 @@ func (c *connection) messageReceive(data []byte) {
 			log.Warn().Msg("received data but no func handle it")
 			return
 		}
-		for i := range listeners {
-			if fn, ok := listeners[i].(func()); ok { // its a simple func(){} callback
-				fn()
-			} else if fnString, ok := listeners[i].(func(string)); ok {
-
-				if msgString, is := msg.(string); is {
-					fnString(msgString)
-				} else if msgInt, is := msg.(int); is {
-					// here if server side waiting for string but client side sent an int, just convert this int to a string
-					fnString(strconv.Itoa(msgInt))
+		for _, item := range listeners {
+			doIt := false
+			switch cb := item.(type) {
+			case message.FuncBlank:
+				cb()
+			case message.FuncInt:
+				if msgType == message.MsgTypeInt {
+					cb(customMessage.(int))
+					doIt = true
 				}
-
-			} else if fnInt, ok := listeners[i].(func(int)); ok {
-				fnInt(msg.(int))
-			} else if fnBool, ok := listeners[i].(func(bool)); ok {
-				fnBool(msg.(bool))
-			} else if fnBytes, ok := listeners[i].(func([]byte)); ok {
-				fnBytes(msg.([]byte))
-			} else {
-				listeners[i].(func(interface{}))(msg)
+			case message.FuncString:
+				if msgType == message.MsgTypeString {
+					cb(customMessage.(string))
+					doIt = true
+				}
+			case message.FuncBytes:
+				if msgType == message.MsgTypeBytes || msgType == message.MsgTypeJSON {
+					cb(customMessage.([]byte))
+					doIt = true
+				}
+			case message.FuncBool:
+				if msgType == message.MsgTypeBool {
+					cb(customMessage.(bool))
+					doIt = true
+				}
+			case message.FuncDefault:
+				cb(customMessage)
+				doIt = true
+			default:
+				log.Warn().Str("id", c.id).Str("topic", evt.String()).Msg(" register a invalid callback func")
+				return
+			}
+			if err != nil {
+				log.Warn().Interface("customMessage", customMessage).Str("topic", evt.String()).Msg(err.Error())
+				return
+			}
+			if !doIt {
+				log.Warn().Str("id", c.id).Str("topic", evt.String()).Msg("receive a customMessage but not find appropriate func to handle it")
 			}
 		}
 	} else {
@@ -375,10 +379,10 @@ func (c *connection) pub(topic message.Topic, data interface{}) error {
 	return c.writeDefault(m)
 }
 
-func (c *connection) Subscribe(topic string, cb MessageFunc) {
+func (c *connection) Subscribe(topic string, cb message.Func) {
 	t := message.NewTopic(topic)
 	if c.onTopicListeners[t.String()] == nil {
-		c.onTopicListeners[t.String()] = make([]MessageFunc, 0)
+		c.onTopicListeners[t.String()] = make([]message.Func, 0)
 		c.subscribe(t)
 	}
 	c.onTopicListeners[t.String()] = append(c.onTopicListeners[t.String()], cb)
