@@ -25,7 +25,7 @@ const (
 	// that are being established under the hoods.
 	//
 	// Last character of the prefix should be ':'.
-	DefaultEvtMessageKey = "ws:"
+	DefaultEvtMessageKey = "ws"
 )
 
 // DefaultIDGenerator returns a random unique for a new connection.
@@ -55,7 +55,7 @@ type Config struct {
 	// with the message that the end-user receives.
 	// Do not change it unless it is absolutely necessary.
 	//
-	// If empty then defaults to []byte("ws:").
+	// If empty then defaults to []byte("ws").
 	EvtMessagePrefix []byte
 	NewConn          func(server *Server, w http.ResponseWriter, r *http.Request) (Connection, error)
 	// Error is the function that will be fired if any client couldn't upgrade the HTTP connection

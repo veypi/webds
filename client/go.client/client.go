@@ -31,7 +31,7 @@ const (
 	//
 	// Defaults to ":".
 	// Last character of the prefix should be ':'.
-	DefaultEvtMessageKey = "ws:"
+	DefaultEvtMessageKey = "ws"
 )
 
 type (
@@ -236,7 +236,7 @@ func (c *connection) messageReceive(data []byte) {
 			log.Warn().Err(message.InvalidMessage).Msg(string(data))
 			return
 		}
-		customMessage, msgType, err := c.messageSerializer.Deserialize(evt, data)
+		customMessage, msgType, err := c.messageSerializer.Deserialize(data)
 		if err != nil {
 			log.Warn().Err(err).Msg(string(data))
 			return

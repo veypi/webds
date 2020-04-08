@@ -44,7 +44,7 @@ func runSub(c *cli.Context) error {
 	fc := func(t string) {
 		conn.Subscribe(t, func(data interface{}) {
 			if !c.Bool("hide") {
-				fmt.Printf("%v %s > %#v \n", time.Now(), t, data)
+				fmt.Printf("%s %s > %#v \n", time.Now().Format("2006-01-02 15:04:05"), t, data)
 			}
 		})
 	}
@@ -107,7 +107,7 @@ func runPub(c *cli.Context) error {
 				time.Sleep(c.Duration("delta"))
 			}
 			if !c.Bool("hide") {
-				fmt.Printf("%v %s < %s\n", time.Now(), arg[0], msg)
+				fmt.Printf("%s %s < %s\n", time.Now().Format("2006-01-02 15:04:05"), arg[0], msg)
 			}
 			log.HandlerErrs(conn.Pub(arg[0], msg))
 		}

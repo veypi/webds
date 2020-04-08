@@ -246,7 +246,7 @@ func (c *connection) messageReceived(data []byte) error {
 	if bytes.HasPrefix(data, c.server.config.EvtMessagePrefix) {
 		//it's a custom ws message
 		topic := c.server.messageSerializer.GetMsgTopic(data)
-		customMessage, msgType, err := c.server.messageSerializer.Deserialize(topic, data)
+		customMessage, msgType, err := c.server.messageSerializer.Deserialize(data)
 		if err != nil {
 			return err
 		}
@@ -258,9 +258,11 @@ func (c *connection) messageReceived(data []byte) error {
 			switch topic.String() {
 			case message.TopicSubscribe.String():
 				// TODO: 权限验证
-				if s, is := customMessage.(string); is {
+				if s, is := customMessage.(string); is && s != "" && s != "/" {
 					c.Subscribe(s)
 				}
+			case message.TopicSubscribeAll.String():
+				c.Subscribe("")
 			case message.TopicCancel.String():
 				if s, is := customMessage.(string); is {
 					c.CancelSubscribe(s)
@@ -292,6 +294,12 @@ func (c *connection) messageReceived(data []byte) error {
 				log.Warn().Err(message.ErrUnformedMsg).Msg(string(data))
 			}
 		} else {
+			// TODO 广播权限验证
+			if message.IsPublicTopic(topic) {
+				// TODO 广播机制是否需要修改 现在为并发广播 是否需要集中发送到一个channel去进行广播以避免锁消耗
+				_ = c.server.Broadcast(topic.String(), data)
+			}
+			// 触发本地的监听函数
 			listeners, ok := c.onTopicListeners[topic.String()]
 			if !ok || len(listeners) == 0 {
 				return nil // if not listeners for this event exit from here
@@ -301,6 +309,7 @@ func (c *connection) messageReceived(data []byte) error {
 				switch cb := item.(type) {
 				case message.FuncBlank:
 					cb()
+					doIt = true
 				case message.FuncInt:
 					if msgType == message.MsgTypeInt {
 						cb(customMessage.(int))
@@ -331,10 +340,6 @@ func (c *connection) messageReceived(data []byte) error {
 				if !doIt {
 					log.Warn().Str("id", c.id).Str("topic", topic.String()).Msg("receive a msg but not find appropriate func to handle it")
 				}
-			}
-			// TODO 广播权限验证
-			if message.IsPublicTopic(topic) {
-				_ = c.server.Broadcast(topic.String(), data)
 			}
 		}
 		return nil
