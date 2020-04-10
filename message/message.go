@@ -355,7 +355,7 @@ func (ms *Serializer) SeparateMessage(msg []byte) (target Topic, source []byte, 
 }
 
 // getWebsocketCustomEvent return empty string when the websocketMessage is native message
-// 格式: prefix;target_topic;source_topic;random_tag;type;msg
+// 格式: prefix(n)type(1)random_tag(4)source_idx(4)target_topic;msg
 func (ms *Serializer) GetMsgTopic(websocketMessage []byte) Topic {
 	if len(websocketMessage) < ms.targetIdx {
 		return nil
@@ -370,21 +370,18 @@ func (ms *Serializer) GetMsgTopic(websocketMessage []byte) Topic {
 	return NewTopic(t)
 }
 
-func (ms *Serializer) GetSourceTopic(msg []byte) Topic {
-	sepIdx := 0
-	startIdx := 0
-	for i, c := range msg {
-		if c == messageSeparatorByte {
-			if sepIdx == 2 {
-				return NewTopic("/self/" + string(msg[startIdx:i]))
-			}
-			sepIdx++
-			startIdx = i + 1
-		}
-	}
-	return nil
+// 格式: prefix(n)type(1)random_tag(4)source_idx(4)target_topic;msg
+func (ms *Serializer) GetSourceID(msg []byte) uint32 {
+	return binary.BigEndian.Uint32(msg[ms.sourceIdx:ms.targetIdx])
 }
 
-func (ms *Serializer) AddSourceTopicItem(msg []byte, source_id string) {
-	// TODO
+func (ms *Serializer) ResetSourceID(msg []byte, source_id int) {
+	binary.BigEndian.PutUint32(msg[ms.sourceIdx:ms.targetIdx], uint32(source_id))
+}
+
+func (ms *Serializer) GetRandomID(msg []byte) uint32 {
+	return binary.BigEndian.Uint32(msg[ms.randomIdx:ms.sourceIdx])
+}
+func (ms *Serializer) ResetRandomTag(msg []byte, random_tag int) {
+	binary.BigEndian.PutUint32(msg[ms.randomIdx:ms.sourceIdx], uint32(random_tag))
 }
