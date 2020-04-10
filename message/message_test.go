@@ -1,7 +1,6 @@
 package message
 
 import (
-	"encoding/binary"
 	"testing"
 )
 
@@ -110,14 +109,4 @@ func TestSerializer_GetMsgTopic(t *testing.T) {
 	if nt.String() != tp.String() {
 		t.Errorf("get msg topic error: %s -> %s", tp, nt)
 	}
-}
-
-func TestSerializer_SeparateMessage(t *testing.T) {
-	st := s.GetSourceTopic([]byte("ws;target_topic;source_topic;random_tag;type;msg"))
-	if st.String() != "/self/source_topic" {
-		t.Errorf("get source topic error: %s", st)
-	}
-	p := make([]byte, 6)
-	binary.BigEndian.PutUint32(p[1:5], 1)
-	t.Log(p)
 }

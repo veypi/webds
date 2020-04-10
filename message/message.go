@@ -330,30 +330,6 @@ func (ms *Serializer) Deserialize(websocketMessage []byte) (interface{}, MsgType
 	}
 }
 
-func (ms *Serializer) SeparateMessage(msg []byte) (target Topic, source []byte, tag string, typ MsgType, data []byte) {
-	sepIdx := 0
-	startIdx := 0
-	for i, c := range msg {
-		if c == messageSeparatorByte {
-			switch sepIdx {
-			case 1:
-				target = NewTopic(string(msg[startIdx:i]))
-			case 2:
-				source = msg[startIdx:i]
-			case 3:
-				tag = string(msg[startIdx:i])
-			case 4:
-				typ = msg[startIdx]
-				data = msg[i+1:]
-				return
-			}
-			sepIdx++
-			startIdx = i + 1
-		}
-	}
-	return
-}
-
 // getWebsocketCustomEvent return empty string when the websocketMessage is native message
 // 格式: prefix(n)type(1)random_tag(4)source_idx(4)target_topic;msg
 func (ms *Serializer) GetMsgTopic(websocketMessage []byte) Topic {
