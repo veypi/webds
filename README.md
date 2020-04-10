@@ -22,17 +22,18 @@ Distributed System with websocket
 
 - 通信协议
 
-        主要以多级topic设计
-        参考iris  序列化成字节流，格式: prefix;target_topic;source_topic;random_tag;type;msg
-        source_topic: 记录每一次进行转发广播时的来源id 
+        主要以多级topic设计消息目标地址, 父子topic订阅节点会递归触发 其余参考ip层设计协议
+        参考iris  序列化成字节流，格式: prefix(n)type(1)random_tag(4)source_idx(4)target_topic;msg
+        type: 1个字节 msg type
         random_tag: 5个byte
+        source_idx: 四个字节长度的数字 利用源地址映射 避免该地址长度线性增长 
+        target_topic: 目标topic
         msg: json or protobuf
         保留下列1级topic，其余topic用于分发
             /sys   用于系统指令, 消息不广播, 用以两个节点之间连接维护状态和共享信息
             /inner 用于client 连接的Server直接处理，不进行广播, 响应函数由 conn.On 函数指定
-            /self  用以标记消息来源 转发一层添加一层 
-                   如 /self/master_id0/master_id1/.../client_id
-                   每个 self 下属topic 标志唯一个节点, 加上random_tag用于唯一回复消息
+            /self  用于回复消息时使用, 回复消息统一目标地址为/self/source_idx
+                   source_idx 定长 4个字节, 根据source_idx 映射表找到实际的上一跳地址
             /srv   用以注册同步类型服务 暂未开发
 
 - 命令行工具设计

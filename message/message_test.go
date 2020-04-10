@@ -1,9 +1,13 @@
 package message
 
-import "testing"
+import (
+	"encoding/binary"
+	"testing"
+)
+
+var s = NewSerializer([]byte("ws"))
 
 func TestSerializer(t *testing.T) {
-	s := NewSerializer([]byte("ws"))
 	data := map[int]interface{}{
 		-1: nil,
 		0:  "test",
@@ -22,21 +26,29 @@ func TestSerializer(t *testing.T) {
 		}
 		r, _, err := s.Deserialize(res)
 		if err != nil {
-			t.Errorf("%s :%v", res, err)
+			t.Errorf("%d %s :%v", i, res, err)
 			return
 		}
 		if i == 5 {
 			r = string(r.([]byte))
 		}
-		t.Logf("%d: %v (%T) => %v (%T)", i, d, d, r, r)
+		s.ReturnBackBytes(res)
+		t.Logf("%d %s : %v (%T) => %v (%T)", i, res, d, d, r, r)
 	}
 
 }
 
-func BenchmarkSerializer(b *testing.B) {
-	s := NewSerializer([]byte("ws"))
-	data := map[string]interface{}{"a": "b", "c": 2, "d": 1.5}
-	//data := 1234
+// BenchmarkSerializer-16           1721188               689 ns/op             205 B/op          6 allocs/op
+// BenchmarkSerializer-16          7587789        172 ns/op              72 B/op          6 allocs/op
+/*
+BenchmarkSerializer_Int-16               9517542               106 ns/op              40 B/op          2 allocs/op
+BenchmarkSerializer_String-16           13252210                98.7 ns/op            48 B/op          2 allocs/op
+BenchmarkSerializer_Bool-16             19768287                80.2 ns/op            32 B/op          1 allocs/op
+BenchmarkSerializer_bytes-16            12071730               113 ns/op              64 B/op          2 allocs/op
+BenchmarkSerializer_Json-16              2083652               496 ns/op             216 B/op          6 allocs/op
+*/
+func benchmarkSerializer(b *testing.B, data interface{}) {
+	//data := map[string]interface{}{"a": "b", "c": 2, "d": 1.5}
 	var res []byte
 	var err error
 	tp := NewTopic("home")
@@ -51,7 +63,24 @@ func BenchmarkSerializer(b *testing.B) {
 			b.Error(err)
 			return
 		}
+		s.ReturnBackBytes(res)
 	}
+}
+
+func BenchmarkSerializer_Int(b *testing.B) {
+	benchmarkSerializer(b, 12345)
+}
+func BenchmarkSerializer_String(b *testing.B) {
+	benchmarkSerializer(b, "12345")
+}
+func BenchmarkSerializer_Bool(b *testing.B) {
+	benchmarkSerializer(b, true)
+}
+func BenchmarkSerializer_bytes(b *testing.B) {
+	benchmarkSerializer(b, []byte("12345"))
+}
+func BenchmarkSerializer_Json(b *testing.B) {
+	benchmarkSerializer(b, map[string]interface{}{"a": "b", "c": 2, "d": 1.5})
 }
 
 func TestTopic(t *testing.T) {
@@ -71,7 +100,6 @@ func TestTopic(t *testing.T) {
 }
 
 func TestSerializer_GetMsgTopic(t *testing.T) {
-	s := NewSerializer([]byte("ws"))
 	tp := NewTopic("home")
 	data, err := s.Serialize(tp, 123)
 	if err != nil {
@@ -85,10 +113,11 @@ func TestSerializer_GetMsgTopic(t *testing.T) {
 }
 
 func TestSerializer_SeparateMessage(t *testing.T) {
-	s := NewSerializer([]byte("ws"))
 	st := s.GetSourceTopic([]byte("ws;target_topic;source_topic;random_tag;type;msg"))
-	if st.String() != "/source_topic" {
+	if st.String() != "/self/source_topic" {
 		t.Errorf("get source topic error: %s", st)
 	}
-	//s.SeparateMessage(data)
+	p := make([]byte, 6)
+	binary.BigEndian.PutUint32(p[1:5], 1)
+	t.Log(p)
 }

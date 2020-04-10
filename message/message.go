@@ -2,13 +2,14 @@ package message
 
 import (
 	"bytes"
+	"encoding/binary"
+	"errors"
 	"github.com/json-iterator/go"
-	"github.com/lightjiang/utils"
 	"github.com/lightjiang/utils/log"
 	"strconv"
 	"sync"
-
-	"errors"
+	"sync/atomic"
+	"unsafe"
 )
 
 type (
@@ -94,16 +95,21 @@ func NewTopic(t string) Topic {
 
 type Topic interface {
 	String() string
+	Bytes() []byte
 	FirstFragment() string
 	Fragment(int) string
 	Since(int) string
 	Len() int
 }
 
-type topic string
+type topic []byte
 
 func (t topic) String() string {
 	return string(t)
+}
+
+func (t topic) Bytes() []byte {
+	return t
 }
 
 func (t topic) Len() int {
@@ -181,136 +187,134 @@ const (
 )
 
 var InvalidMessage = errors.New("invalid message")
-var InvalidPrefix = errors.New("invalid prefix")
 var InvalidTopic = errors.New("invalid topic")
 
 type Serializer struct {
-	prefix       []byte
-	prefixAndSep []byte
-
-	prefixLen       int
-	prefixAndSepIdx int
+	prefix    []byte
+	prefixLen int
+	typeIdx   int
+	randomIdx int
+	sourceIdx int
+	targetIdx int
 
 	buf sync.Pool
 }
 
+// 格式: prefix(n)type(1)random_tag(4)source_idx(4)target_topic;msg
 func NewSerializer(messagePrefix []byte) *Serializer {
-	for _, c := range messagePrefix {
-		if c == messageSeparatorByte {
-			panic(InvalidPrefix)
-		}
-	}
-	pas := make([]byte, 0, 10)
-	pas = append(pas, messagePrefix...)
-	pas = append(pas, messageSeparatorByte)
+	typeIdx := len(messagePrefix)
+	randomIdx := typeIdx + 1
+	sourceIdx := randomIdx + 4
+	targetIdx := sourceIdx + 4
 	return &Serializer{
-		prefix:          messagePrefix,
-		prefixAndSep:    pas,
-		prefixLen:       len(messagePrefix),
-		prefixAndSepIdx: len(messagePrefix) + 1,
+		prefix:    messagePrefix,
+		prefixLen: typeIdx,
+		typeIdx:   typeIdx,
+		randomIdx: randomIdx,
+		sourceIdx: sourceIdx,
+		targetIdx: targetIdx,
 		buf: sync.Pool{
 			New: func() interface{} {
-				return &bytes.Buffer{}
+				b := make([]byte, 10240)
+				copy(b, messagePrefix)
+				return b
 			},
 		},
 	}
 }
 
 var (
-	boolTrueB  = []byte("true")
-	boolFalseB = []byte("false")
+	boolTrue  = []byte("1")
+	boolFalse = []byte("0")
 )
+
+func (ms *Serializer) ReturnBackBytes(p []byte) {
+
+	ms.buf.Put(p[:10240])
+}
 
 // websocketMessageSerialize serializes a custom websocket message from websocketServer to be delivered to the client
 // returns the  string form of the message
 // Supported data types are: string, int, bool, bytes and JSON.
-// 格式: prefix;target_topic;source_topic;random_tag;type;msg
+var msgCounter int32 = 0
+
+// 格式: prefix(n)type(1)random_tag(4)source_idx(4)target_topic;msg
 func (ms *Serializer) Serialize(t Topic, data interface{}) ([]byte, error) {
-	b := ms.buf.Get().(*bytes.Buffer)
-	//b := &bytes.Buffer{}
-	b.Write(ms.prefixAndSep)
-	b.WriteString(t.String())
-	b.WriteByte(messageSeparatorByte)
+	b := ms.buf.Get().([]byte)
 	// 省略空source_topic source_topic 一般为空 只有server对消息进行转发时自动追加消息
-	b.WriteByte(messageSeparatorByte)
-	b.WriteString(utils.RandSeq(5))
-	b.WriteByte(messageSeparatorByte)
+	// random_tag 记录了一个序列化的次数
+	binary.BigEndian.PutUint32(b[ms.randomIdx:ms.sourceIdx], uint32(atomic.AddInt32(&msgCounter, 1)))
+	// source_idx 此时需要为空, 只有经过一个节点进行消息转发时更新此记录
 	if data == nil {
 		data = ""
 	}
-
+	tb := append(t.Bytes(), messageSeparatorByte)
+	msgLen := ms.targetIdx + len(tb)
+	copy(b[ms.targetIdx:], tb)
 	switch v := data.(type) {
 	case string:
-		b.WriteByte(MsgTypeString)
-		b.WriteByte(messageSeparatorByte)
-		b.WriteString(v)
+		b[ms.typeIdx] = MsgTypeString
+		copy(b[msgLen:], v)
+		msgLen += len(v)
 	case int:
-		b.WriteByte(MsgTypeInt)
-		b.WriteByte(messageSeparatorByte)
-		b.WriteString(strconv.Itoa(v))
+		b[ms.typeIdx] = MsgTypeInt
+		//s := strconv.Itoa(v)
+		s := strconv.AppendInt(b[msgLen:msgLen], int64(v), 10)
+		//copy(b[msgLen:], s)
+		msgLen += len(s)
 	case bool:
-		b.WriteByte(MsgTypeBool)
-		b.WriteByte(messageSeparatorByte)
+		b[ms.typeIdx] = MsgTypeBool
 		if v {
-			b.Write(boolTrueB)
+			b[msgLen] = '1'
 		} else {
-			b.Write(boolFalseB)
+			b[msgLen] = '0'
 		}
+		msgLen += 1
 	case []byte:
-		b.WriteByte(MsgTypeBytes)
-		b.WriteByte(messageSeparatorByte)
-		b.Write(v)
+		b[ms.typeIdx] = MsgTypeBytes
+		copy(b[msgLen:], v)
+		msgLen += len(v)
 	default:
 		//we suppose is json
 		res, err := json.Marshal(data)
 		if err != nil {
 			return nil, err
 		}
-		b.WriteByte(MsgTypeJSON)
-		b.WriteByte(messageSeparatorByte)
-		b.Write(res)
+		copy(b[msgLen:], res)
+		msgLen += len(res)
+		b[ms.typeIdx] = MsgTypeJSON
 	}
-
-	message := b.Bytes()
-	b.Reset()
-	ms.buf.Put(b)
-	return message, nil
+	return b[:msgLen], nil
 }
 
 // deserialize deserializes a custom websocket message from the client
 // such as  prefix;topic;0;abc_msg
 // Supported data types are: string, int, bool, bytes and JSON.
-// 格式: prefix;target_topic;source_topic;random_tag;type;msg
+// 格式: prefix(n)type(1)random_tag(4)source_idx(4)target_topic;msg
 func (ms *Serializer) Deserialize(websocketMessage []byte) (interface{}, MsgType, error) {
-	sepIdx := 0
-	var typ byte
-	var data []byte
-	for i, c := range websocketMessage {
-		if c == messageSeparatorByte {
-			if sepIdx == 4 {
-				typ = websocketMessage[i-1]
-				data = websocketMessage[i+1:]
-				break
-			}
-			sepIdx++
-		}
-	}
-	if sepIdx != 4 {
+	if len(websocketMessage) < ms.targetIdx {
 		return nil, ' ', InvalidMessage
 	}
-
+	typ := websocketMessage[ms.typeIdx]
+	var data []byte
+	for i, c := range websocketMessage[ms.targetIdx:] {
+		if c == messageSeparatorByte {
+			data = websocketMessage[ms.targetIdx+i+1:]
+			break
+		}
+	}
 	switch typ {
 	case MsgTypeString:
-		return string(data), MsgTypeString, nil
+		return *(*string)(unsafe.Pointer(&data)), MsgTypeString, nil
 	case MsgTypeInt:
-		msg, err := strconv.Atoi(string(data))
+		msg, err := strconv.Atoi(*(*string)(unsafe.Pointer(&data)))
 		if err != nil {
 			log.HandlerErrs(err)
 			return nil, ' ', InvalidMessage
 		}
 		return msg, MsgTypeInt, nil
 	case MsgTypeBool:
-		if bytes.Equal(data, boolTrueB) {
+		if bytes.Equal(data, boolTrue) {
 			return true, MsgTypeBool, nil
 		}
 		return false, MsgTypeBool, nil
@@ -326,7 +330,7 @@ func (ms *Serializer) Deserialize(websocketMessage []byte) (interface{}, MsgType
 	}
 }
 
-func (ms *Serializer) SeparateMessage(msg []byte) (target Topic, source Topic, tag string, typ MsgType, data []byte) {
+func (ms *Serializer) SeparateMessage(msg []byte) (target Topic, source []byte, tag string, typ MsgType, data []byte) {
 	sepIdx := 0
 	startIdx := 0
 	for i, c := range msg {
@@ -335,7 +339,7 @@ func (ms *Serializer) SeparateMessage(msg []byte) (target Topic, source Topic, t
 			case 1:
 				target = NewTopic(string(msg[startIdx:i]))
 			case 2:
-				source = NewTopic(string(msg[startIdx:i]))
+				source = msg[startIdx:i]
 			case 3:
 				tag = string(msg[startIdx:i])
 			case 4:
@@ -353,11 +357,11 @@ func (ms *Serializer) SeparateMessage(msg []byte) (target Topic, source Topic, t
 // getWebsocketCustomEvent return empty string when the websocketMessage is native message
 // 格式: prefix;target_topic;source_topic;random_tag;type;msg
 func (ms *Serializer) GetMsgTopic(websocketMessage []byte) Topic {
-	if len(websocketMessage) < ms.prefixAndSepIdx {
+	if len(websocketMessage) < ms.targetIdx {
 		return nil
 	}
 	t := ""
-	for _, c := range websocketMessage[ms.prefixAndSepIdx:] {
+	for _, c := range websocketMessage[ms.targetIdx:] {
 		if c == messageSeparatorByte {
 			break
 		}
@@ -372,7 +376,7 @@ func (ms *Serializer) GetSourceTopic(msg []byte) Topic {
 	for i, c := range msg {
 		if c == messageSeparatorByte {
 			if sepIdx == 2 {
-				return NewTopic(string(msg[startIdx:i]))
+				return NewTopic("/self/" + string(msg[startIdx:i]))
 			}
 			sepIdx++
 			startIdx = i + 1

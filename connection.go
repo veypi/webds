@@ -246,14 +246,14 @@ func (c *connection) messageReceived(data []byte) error {
 	if bytes.HasPrefix(data, c.server.config.EvtMessagePrefix) {
 		//it's a custom ws message
 		topic := c.server.messageSerializer.GetMsgTopic(data)
-		customMessage, msgType, err := c.server.messageSerializer.Deserialize(data)
-		if err != nil {
-			return err
-		}
 		if message.IsSysTopic(topic) {
 			if topic.Fragment(1) == "admin" && !strings.HasPrefix(c.request.RemoteAddr, "127.0.0.1") {
 				log.Warn().Str("addr", c.request.RemoteAddr).Str("topic", topic.String()).Msg("receive invalid admin command")
 				return nil
+			}
+			customMessage, _, err := c.server.messageSerializer.Deserialize(data)
+			if err != nil {
+				return err
 			}
 			switch topic.String() {
 			case message.TopicSubscribe.String():
@@ -303,6 +303,10 @@ func (c *connection) messageReceived(data []byte) error {
 			listeners, ok := c.onTopicListeners[topic.String()]
 			if !ok || len(listeners) == 0 {
 				return nil // if not listeners for this event exit from here
+			}
+			customMessage, msgType, err := c.server.messageSerializer.Deserialize(data)
+			if err != nil {
+				return err
 			}
 			for _, item := range listeners {
 				doIt := false

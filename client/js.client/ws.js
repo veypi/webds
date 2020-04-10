@@ -5,12 +5,15 @@ const websocketByteMessageType = 3
 const websocketJSONMessageType = 4
 const websocketMessagePrefix = 'ws'
 const websocketMessageSeparator = ';'
-const websocketMessagePrefixLen = websocketMessagePrefix.length
-const websocketMessageSeparatorLen = websocketMessageSeparator.length
-const websocketMessagePrefixAndSepIdx = websocketMessagePrefixLen + websocketMessageSeparatorLen
+const websocketMessageTypeIdx = websocketMessagePrefix.length
+const websocketMessageRandomIdx = websocketMessageTypeIdx + 1
+const websocketMessageSourceIdx = websocketMessageRandomIdx + 4
+const websocketMessageTargetIdx = websocketMessageSourceIdx + 4
 const typeErr = new Error('type error')
 const NotAllowedTopic = new Error('this topic is not allowed to subscribe/publish')
 const UnformedMsg = new Error('unformed msg')
+let msgCounter = 0
+let source_idx = String.fromCharCode(0x00, 0x00, 0x00, 0x00)
 
 // utils
 function isNumber(obj) {
@@ -154,18 +157,15 @@ class Ws {
 
   //
   // messages
-  // 格式: prefix;target_topic;source_topic;random_tag;type;msg
-
+  // 格式: prefix(n)type(1)random_tag(4)source_idx(4)target_topic;msg
   _msg(topic, websocketMessageType, dataMessage) {
+    msgCounter++
     return (
       websocketMessagePrefix +
-      websocketMessageSeparator +
-      topic.String() +
-      websocketMessageSeparator +
-      websocketMessageSeparator +
-      randomString(5) +
-      websocketMessageSeparator +
       String(websocketMessageType) +
+      int32ToBytesStr(msgCounter) +
+      source_idx +
+      topic.String() +
       websocketMessageSeparator +
       dataMessage
     )
@@ -179,7 +179,11 @@ class Ws {
       m = data.toString()
     } else if (isBoolean(data)) {
       t = websocketBoolMessageType
-      m = data.toString()
+      if (data) {
+        m = String.fromCharCode(0x01)
+      } else {
+        m = String.fromCharCode(0x00)
+      }
     } else if (isString(data)) {
       t = websocketStringMessageType
       m = data.toString()
@@ -196,26 +200,11 @@ class Ws {
     return this._msg(event, t, m)
   }
 
-  // 格式: prefix;target_topic;source_topic;random_tag;type;msg
-  decodeMessage(websocketMessage) {
-    let startIdx = 0
-    let sepIdx = 0
-    let websocketMessageType = -1
-    let theMessage = ''
-    for (let i in websocketMessage) {
-      if (websocketMessage[i] === websocketMessageSeparator) {
-        if (sepIdx === 4) {
-          websocketMessageType = parseInt(websocketMessage.charAt(i - 1))
-          theMessage = websocketMessage.substring(++i)
-          break
-        }
-        startIdx = i + 1
-        sepIdx++
-      }
-    }
-    if (websocketMessageType === -1) {
-      return null
-    }
+  // 格式: prefix(n)type(1)random_tag(4)source_idx(4)target_topic;msg
+  decodeMessage(topic, websocketMessage) {
+    let websocketMessageType = Number(websocketMessage[websocketMessageTypeIdx])
+    let theMessage = websocketMessage.substring(websocketMessageTargetIdx + topic.len() + 1)
+    console.log(websocketMessageType)
     if (websocketMessageType === websocketIntMessageType) {
       return parseInt(theMessage)
     } else if (websocketMessageType === websocketBoolMessageType) {
@@ -232,11 +221,19 @@ class Ws {
   }
 
   getWebsocketCustomEvent(websocketMessage) {
-    if (websocketMessage.length < websocketMessagePrefixAndSepIdx) {
+    if (websocketMessage.length < websocketMessageTargetIdx) {
       return ''
     }
-    let s = websocketMessage.substring(websocketMessagePrefixAndSepIdx, websocketMessage.length)
-    return new Topic(s.substring(0, s.indexOf(websocketMessageSeparator)))
+    let s = ''
+    for (let i = websocketMessageTargetIdx; i <= websocketMessage.length; i++) {
+      if (websocketMessage[i] === websocketMessageSeparator) {
+        break
+      }
+      s += websocketMessage[i]
+    }
+    // let s = websocketMessage.substring(websocketMessageTargetIdx, websocketMessage.length)
+    // return new Topic(s.substring(0, s.indexOf(websocketMessageSeparator)))
+    return new Topic(s)
   }
 
   //
@@ -246,7 +243,7 @@ class Ws {
     let message = evt.data
     if (message.indexOf(websocketMessagePrefix) !== -1) {
       let topic = this.getWebsocketCustomEvent(message)
-      let data = this.decodeMessage(message)
+      let data = this.decodeMessage(topic, message)
       if (topic !== '') {
         if (topic.FirstFragment() === SysTopic) {
           if (topic.String() === TopicAuth.String()) {
@@ -358,6 +355,16 @@ function randomString(len) {
   }
   return pwd
 }
+
+function int32ToBytesStr(i) {
+  return String.fromCharCode(i >> 24, i >> 16, i >> 8, i)
+}
+function bytesToInt32(b) {
+  return (
+    b.charCodeAt(3) | (b.charCodeAt(2) << 8) | (b.charCodeAt(1) << 16) | (b.charCodeAt(0) << 24)
+  )
+}
+
 export default Ws
 // let script = document.createElement('script');
 // script.src = "file:///home/light/test/ws.js";
