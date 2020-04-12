@@ -51,6 +51,15 @@ var (
 	TopicSysLog = NewTopic("/sys/log")
 	// 连接权限验证
 	TopicAuth = NewTopic("/sys/auth")
+
+	// 声明自己是个同级节点
+	TopicLateral = NewTopic("/sys/lateral")
+	// 同步 同级可连接地址
+	TopicLateralIps = NewTopic("/sys/lateral/ips")
+	// 声明自己是个子级节点
+	TopicSuperior = NewTopic("/sys/Superior")
+	// 同步 父级可连接地址
+	TopicSuperiorIps = NewTopic("/sys/Superior/ips")
 )
 
 var (
@@ -82,13 +91,13 @@ func IsSysTopic(t Topic) bool {
 }
 
 func NewTopic(t string) Topic {
-	if len(t) > 0 && t[0] == '/' {
-		return topic(t)
-	}
 	for _, c := range t {
 		if c == messageSeparatorByte {
 			panic(InvalidTopic)
 		}
+	}
+	if len(t) > 0 && t[0] == '/' {
+		return topic(t)
 	}
 	return topic("/" + t)
 }
@@ -105,7 +114,7 @@ type Topic interface {
 type topic []byte
 
 func (t topic) String() string {
-	return string(t)
+	return *(*string)(unsafe.Pointer(&t))
 }
 
 func (t topic) Bytes() []byte {
@@ -151,6 +160,10 @@ func (t topic) Since(count int) string {
 	return t.String()[index:]
 }
 
+func (t topic) IsChildOf(p Topic) bool {
+	return bytes.HasPrefix(t, p.Bytes())
+}
+
 type (
 	MsgType = byte
 )
@@ -182,7 +195,6 @@ const (
 )
 
 const (
-	messageSeparator     = ";"
 	messageSeparatorByte = ';'
 )
 
@@ -265,9 +277,9 @@ func (ms *Serializer) Serialize(t Topic, data interface{}) ([]byte, error) {
 	case bool:
 		b[ms.typeIdx] = MsgTypeBool
 		if v {
-			b[msgLen] = '1'
+			b[msgLen] = boolTrue[0]
 		} else {
-			b[msgLen] = '0'
+			b[msgLen] = boolFalse[0]
 		}
 		msgLen += 1
 	case []byte:
@@ -351,13 +363,13 @@ func (ms *Serializer) GetSourceID(msg []byte) uint32 {
 	return binary.BigEndian.Uint32(msg[ms.sourceIdx:ms.targetIdx])
 }
 
-func (ms *Serializer) ResetSourceID(msg []byte, source_id int) {
-	binary.BigEndian.PutUint32(msg[ms.sourceIdx:ms.targetIdx], uint32(source_id))
+func (ms *Serializer) ResetSourceID(msg []byte, sourceId int) {
+	binary.BigEndian.PutUint32(msg[ms.sourceIdx:ms.targetIdx], uint32(sourceId))
 }
 
 func (ms *Serializer) GetRandomID(msg []byte) uint32 {
 	return binary.BigEndian.Uint32(msg[ms.randomIdx:ms.sourceIdx])
 }
-func (ms *Serializer) ResetRandomTag(msg []byte, random_tag int) {
-	binary.BigEndian.PutUint32(msg[ms.randomIdx:ms.sourceIdx], uint32(random_tag))
+func (ms *Serializer) ResetRandomTag(msg []byte, randomTag int) {
+	binary.BigEndian.PutUint32(msg[ms.randomIdx:ms.sourceIdx], uint32(randomTag))
 }

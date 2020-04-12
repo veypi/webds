@@ -41,6 +41,8 @@ func DefaultIDGenerator(r *http.Request) string {
 // Config the websocket server configuration
 // all of these are optional.
 type Config struct {
+	// the server id
+	ID string
 	// IDGenerator used to create (and later on, set)
 	// an ID for each incoming websocket connections (clients).
 	// The request is an input parameter which you can use to generate the ID (from headers for example).
@@ -110,6 +112,9 @@ type Config struct {
 
 // Validate validates the configuration
 func (c Config) Validate() Config {
+	if c.ID == "" {
+		c.ID = xid.New().String()
+	}
 	if c.NewConn == nil {
 		c.NewConn = NewConn
 	}

@@ -53,6 +53,7 @@ type (
 		Echo(string, interface{}) error
 		Wait() error
 		Close() error
+		io.Writer
 	}
 
 	Config struct {
@@ -156,20 +157,19 @@ func (c *connection) init(conf *Config) {
 	}
 	c.id = conf.ID
 }
-func (c *connection) write(websocketMessageType websocket.MessageType, data []byte) error {
+func (c *connection) write(websocketMessageType websocket.MessageType, data []byte) (int, error) {
 	c.auth.Lock()
 	defer c.auth.Unlock()
 	if c.started.IfTrue() {
-		return c.conn.Write(c.ctx, websocketMessageType, data)
+		return len(data), c.conn.Write(c.ctx, websocketMessageType, data)
 	} else {
-		return errors.New("connection is not started. please call Wait() first")
+		return 0, errors.New("connection is not started. please call Wait() first")
 	}
 }
 
-func (c *connection) writeDefault(data []byte) error {
+func (c *connection) Write(data []byte) (int, error) {
 	return c.write(c.messageType, data)
 }
-
 func (c *connection) Close() error {
 	if c.disconnected.SetTrue() {
 		c.started.ForceSetFalse()
@@ -376,7 +376,8 @@ func (c *connection) pub(topic message.Topic, data interface{}) error {
 	if err != nil {
 		return err
 	}
-	return c.writeDefault(m)
+	_, err = c.Write(m)
+	return err
 }
 
 func (c *connection) Subscribe(topic string, cb message.Func) {
@@ -409,7 +410,7 @@ func (c *connection) Wait() error {
 			log.HandlerErrs(c.Close())
 		}()
 		// start the ping
-		//go c.startPing()
+		go c.startPing()
 
 		// start the messages reader
 		err = c.startReader()

@@ -3,11 +3,17 @@ package webds
 import (
 	"context"
 	"errors"
+	"fmt"
+	"github.com/lightjiang/utils"
 	"github.com/lightjiang/utils/log"
+	client "github.com/lightjiang/webds/client/go.client"
 	"github.com/lightjiang/webds/message"
 	"github.com/lightjiang/webds/trie"
+	"io"
+	"math/rand"
 	"net/http"
 	"sync"
+	"time"
 )
 
 const (
@@ -16,8 +22,40 @@ const (
 
 type ConnectionFunc func(Connection) error
 
+type serverMaster struct {
+	isSuperior bool
+	url        string
+	id         string
+	latency    int
+	connIn     *connection
+	connOut    *specialConn
+}
+
+func (s *serverMaster) String() string {
+	return fmt.Sprintf("%s;%s;%v", s.url, s.id, s.isSuperior)
+}
+
+func newMasters(s []string, isSuperior bool) []*serverMaster {
+	if len(s) == 0 {
+		return nil
+	}
+	m := make([]*serverMaster, len(s))
+	for i := range s {
+		m[i] = &serverMaster{
+			isSuperior: isSuperior,
+			url:        s[i],
+		}
+	}
+	return m
+}
+
 type Server struct {
-	ctx                   context.Context
+	ctx    context.Context
+	master *serverMaster
+	// record the url address of the superior masters
+	superiorMaster []*serverMaster
+	// record the url address of the lateral masters
+	lateralMaster         []*serverMaster
 	config                Config
 	messageSerializer     *message.Serializer
 	connections           sync.Map // key = the Connection ID.
@@ -29,7 +67,7 @@ type Server struct {
 
 func New(cfg Config) *Server {
 	cfg = cfg.Validate()
-	return &Server{
+	s := &Server{
 		config:                cfg,
 		ctx:                   context.Background(),
 		messageSerializer:     message.NewSerializer(cfg.EvtMessagePrefix),
@@ -38,7 +76,77 @@ func New(cfg Config) *Server {
 		mu:                    sync.RWMutex{},
 		onConnectionListeners: make([]ConnectionFunc, 0, 5),
 	}
+	s.superiorMaster = newMasters(cfg.SuperiorMaster, true)
+	s.lateralMaster = newMasters(cfg.LateralMaster, false)
+	go func() {
+		for {
+			if s.master == nil {
+				isSync := false
+				// 检测有没有没有连入的同级节点
+				for _, c := range s.lateralMaster {
+					if c.connIn == nil {
+						isSync = true
+					}
+				}
+				// 看有没有父级节点可以连接
+				if len(s.superiorMaster) != 0 {
+					isSync = true
+				}
+				if isSync {
+					s.syncMasters()
+				}
+			}
+			time.Sleep(time.Second)
+		}
+	}()
+	return s
 }
+
+func (s *Server) syncMasters() {
+	log.Warn().Msgf("%d", rand.Int31n(1000))
+	time.Sleep(time.Duration(rand.Int63n(1000)) * time.Millisecond)
+	log.Warn().Msgf("\nlateral: \n%+v\n superior: \n%+v", s.lateralMaster, s.superiorMaster)
+	for _, c := range s.lateralMaster {
+		if s.master != nil {
+			return
+		}
+		if c.connIn != nil {
+			continue
+		}
+		temp := s.connectMaster(c)
+		if temp != nil {
+			break
+		}
+	}
+}
+
+func (s *Server) connectMaster(c *serverMaster) *serverMaster {
+	conn := dialConn(s, c.url, 1)
+	cha := make(chan bool, 1)
+	conn.OnConnect(func() {
+		conn.Pub(message.TopicLateral.String(), s.ID())
+	})
+	conn.Subscribe(message.TopicLateralIps.String(), func(res []byte) {
+		log.Warn().Msg(string(res))
+	})
+	conn.Subscribe(message.TopicLateral.String(), func(res string) {
+		if res == "" {
+			s.master = c
+		}
+		log.Warn().Msg(res)
+	})
+	select {
+	case <-cha:
+	case <-time.After(time.Second * 5):
+		log.HandlerErrs(conn.Disconnect(nil))
+	}
+	return nil
+}
+
+func (s *Server) ID() string {
+	return s.config.ID
+}
+
 func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (Connection, error) {
 	// create the new connection
 	c, err := s.config.NewConn(s, w, r)
@@ -56,16 +164,22 @@ func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (Connection, er
 	return c, err
 }
 
-func (s *Server) addConnection(c *connection) (*connection, bool) {
-	conn, loaded := s.connections.LoadOrStore(c.id, c)
-	return conn.(*connection), !loaded
+func (s *Server) addConnection(c interface{}) (interface{}, bool) {
+	conn := c.(SampleConn)
+	c, loaded := s.connections.LoadOrStore(conn.ID(), c)
+	return c, !loaded
 }
 
-func (s *Server) GetConnection(id string) *connection {
+func (s *Server) GetConnection(id string) SampleConn {
+	if conn, ok := s.getConnection(id).(SampleConn); ok {
+		return conn
+	}
+	return nil
+}
+
+func (s *Server) getConnection(id string) interface{} {
 	if temp, ok := s.connections.Load(id); ok {
-		if conn, ok := temp.(*connection); ok {
-			return conn
-		}
+		return temp
 	}
 	return nil
 }
@@ -76,7 +190,7 @@ func (s *Server) OnConnection(cb ConnectionFunc) {
 }
 
 func (s *Server) IsConnected(id string) bool {
-	ok := s.GetConnection(id)
+	ok := s.getConnection(id)
 	return ok != nil
 }
 
@@ -146,22 +260,23 @@ func (s *Server) GetConnectionsByTopic(topic string) []Connection {
 	return conns
 }
 
-func (s *Server) Disconnect(id string) error {
+func (s *Server) Disconnect(id string) {
 	if conn := s.GetConnection(id); conn != nil {
-		return conn.Disconnect(nil)
+		s.CancelAll(id)
+		s.connections.Delete(id)
+		conn.Disconnect(nil)
 	}
-	return nil
 }
 
-func (s *Server) Broadcast(topic string, msg []byte) error {
+func (s *Server) Broadcast(topic string, msg []byte, connID string) error {
 	t := s.topics.Match(topic)
 	if t == nil {
 		return errors.New("topic not exist")
 	}
-	return s.broadcast(t, msg)
+	return s.broadcast(t, msg, connID)
 }
 
-func (s *Server) broadcast(topic trie.Trie, msg []byte) error {
+func (s *Server) broadcast(topic trie.Trie, msg []byte, connID string) error {
 	if topic == nil {
 		return errors.New("topic not exist")
 	}
@@ -170,14 +285,76 @@ func (s *Server) broadcast(topic trie.Trie, msg []byte) error {
 	}
 	var e error
 	for _, id := range topic.IDs() {
-		conn := s.GetConnection(id)
-		if conn != nil {
+		if id == connID {
+			continue
+		}
+		if conn, ok := s.getConnection(id).(SampleConn); ok && conn != nil {
 			_, e = conn.Write(msg)
 			if e != nil {
-				log.Info().Err(conn.Disconnect(e)).Err(e).Msg("broadcast msg failed with " + conn.id)
+				log.Info().Err(conn.Disconnect(e)).Err(e).Msg("broadcast msg failed with " + id)
 				e = nil
 			}
 		}
 	}
 	return nil
+}
+
+// 每个server 只允许有一个往出的连接 所以可以直接用server_id 做为conn_id
+func dialConn(s *Server, url string, typ uint) *specialConn {
+	c := &specialConn{server: s, typ: typ}
+	c.Connection = client.New(&client.Config{
+		Host:             url,
+		ID:               s.ID(),
+		EvtMessagePrefix: s.config.EvtMessagePrefix,
+		PingPeriod:       s.config.PingPeriod,
+		MaxMessageSize:   s.config.MaxMessageSize,
+		BinaryMessages:   s.config.BinaryMessages,
+		ReadBufferSize:   s.config.ReadBufferSize,
+		WriteBufferSize:  s.config.WriteBufferSize,
+	})
+	_, ok := c.server.addConnection(c)
+	if !ok {
+		return nil
+	}
+	go func() {
+		err := c.Wait()
+		log.HandlerErrs(c.Disconnect(err), err)
+	}()
+	return c
+}
+
+type SampleConn interface {
+	ID() string
+	io.Writer
+	Server() *Server
+	Type() uint
+	Disconnect(error) error
+}
+
+var _ SampleConn = &specialConn{}
+var _ SampleConn = &connection{}
+
+type specialConn struct {
+	client.Connection
+	server       *Server
+	typ          uint
+	disconnected utils.SafeBool
+	latency      int
+}
+
+// 0: client  1: lateral  2: superior
+func (c *specialConn) Type() uint {
+	return c.typ
+}
+
+func (c *specialConn) Disconnect(err error) error {
+	if c.disconnected.SetTrue() {
+		c.server.Disconnect(c.ID())
+		return c.Close()
+	}
+	return nil
+}
+
+func (c *specialConn) Server() *Server {
+	return c.server
 }

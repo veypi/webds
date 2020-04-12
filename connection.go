@@ -71,13 +71,18 @@ type (
 		// Disconnect disconnects the client, close the underline websocket conn and removes it from the conn list
 		// returns the error, if any, from the underline connection
 		Disconnect(error) error
+
+		// 0: client  1: lateral 2: superior
+		Type() uint
 	}
 
 	connection struct {
-		ctx                   context.Context
-		underline             *websocket.Conn
-		request               *http.Request
-		id                    string
+		ctx       context.Context
+		underline *websocket.Conn
+		request   *http.Request
+		id        string
+		// 0: client  1: lateral 2: superior
+		typ                   uint
 		messageType           websocket.MessageType
 		disconnected          utils.SafeBool
 		onDisconnectListeners []DisconnectFunc
@@ -154,6 +159,10 @@ func releaseConn(c *connection) {
 	connPool.Put(c)
 }
 
+func (c *connection) Type() uint {
+	return c.typ
+}
+
 // Write writes a raw websocket message with a specific type to the client
 // used by ping messages and any CloseMessage types.
 func (c *connection) write(websocketMessageType websocket.MessageType, data []byte) (int, error) {
@@ -225,7 +234,10 @@ func (c *connection) startReader() {
 			if errors.Is(err, io.EOF) {
 				break
 			}
-			if websocket.CloseStatus(err) != websocket.StatusNormalClosure {
+			switch websocket.CloseStatus(err) {
+			case websocket.StatusNormalClosure:
+			case websocket.StatusGoingAway:
+			default:
 				log.HandlerErrs(err)
 				c.FireOnError(err)
 			}
@@ -286,64 +298,62 @@ func (c *connection) messageReceived(data []byte) error {
 				})
 				log.HandlerErrs(c.echo(message.TopicGetAllNodes, res))
 			case message.TopicStopNode.String():
-				conn := c.server.GetConnection(customMessage.(string))
-				if conn != nil {
-					log.HandlerErrs(conn.echo(message.TopicAuth, "exit"), conn.Disconnect(nil))
+				conn := c.server.getConnection(customMessage.(string))
+				if conn, ok := conn.(Connection); ok && conn != nil {
+					log.HandlerErrs(conn.Echo(message.TopicAuth.String(), "exit"), conn.Disconnect(nil))
 				}
 			default:
 				log.Warn().Err(message.ErrUnformedMsg).Msg(string(data))
 			}
-		} else {
+		} else if message.IsPublicTopic(topic) {
 			// TODO 广播权限验证
-			if message.IsPublicTopic(topic) {
-				// TODO 广播机制是否需要修改 现在为并发广播 是否需要集中发送到一个channel去进行广播以避免锁消耗
-				_ = c.server.Broadcast(topic.String(), data)
-			}
-			// 触发本地的监听函数
-			listeners, ok := c.onTopicListeners[topic.String()]
-			if !ok || len(listeners) == 0 {
-				return nil // if not listeners for this event exit from here
-			}
-			customMessage, msgType, err := c.server.messageSerializer.Deserialize(data)
-			if err != nil {
-				return err
-			}
-			for _, item := range listeners {
-				doIt := false
-				switch cb := item.(type) {
-				case message.FuncBlank:
-					cb()
+			// TODO 广播机制是否需要修改 现在为并发广播 是否需要集中发送到一个channel去进行广播以避免锁消耗
+			_ = c.server.Broadcast(topic.String(), data, c.id)
+		}
+		// 触发本地的监听函数
+		listeners, ok := c.onTopicListeners[topic.String()]
+		if !ok || len(listeners) == 0 {
+			return nil // if not listeners for this event exit from here
+		}
+		customMessage, msgType, err := c.server.messageSerializer.Deserialize(data)
+		if err != nil {
+			return err
+		}
+		for _, item := range listeners {
+			doIt := false
+			switch cb := item.(type) {
+			case message.FuncBlank:
+				cb()
+				doIt = true
+			case message.FuncInt:
+				if msgType == message.MsgTypeInt {
+					cb(customMessage.(int))
 					doIt = true
-				case message.FuncInt:
-					if msgType == message.MsgTypeInt {
-						cb(customMessage.(int))
-						doIt = true
-					}
-				case message.FuncString:
-					if msgType == message.MsgTypeString {
-						cb(customMessage.(string))
-						doIt = true
-					}
-				case message.FuncBytes:
-					if msgType == message.MsgTypeBytes || msgType == message.MsgTypeJSON {
-						cb(customMessage.([]byte))
-						doIt = true
-					}
-				case message.FuncBool:
-					if msgType == message.MsgTypeBool {
-						cb(customMessage.(bool))
-						doIt = true
-					}
-				case message.FuncDefault:
-					cb(customMessage)
+				}
+			case message.FuncString:
+				if msgType == message.MsgTypeString {
+					cb(customMessage.(string))
 					doIt = true
-				default:
-					log.Warn().Str("id", c.id).Str("topic", topic.String()).Msg(" register a invalid callback func")
-					return nil
 				}
-				if !doIt {
-					log.Warn().Str("id", c.id).Str("topic", topic.String()).Msg("receive a msg but not find appropriate func to handle it")
+			case message.FuncBytes:
+				if msgType == message.MsgTypeBytes || msgType == message.MsgTypeJSON {
+					cb(customMessage.([]byte))
+					doIt = true
 				}
+			case message.FuncBool:
+				if msgType == message.MsgTypeBool {
+					cb(customMessage.(bool))
+					doIt = true
+				}
+			case message.FuncDefault:
+				cb(customMessage)
+				doIt = true
+			default:
+				log.Warn().Str("id", c.id).Str("topic", topic.String()).Msg(" register a invalid callback func")
+				return nil
+			}
+			if !doIt {
+				log.Warn().Str("id", c.id).Str("topic", topic.String()).Msg("receive a msg but not find appropriate func to handle it")
 			}
 		}
 		return nil
@@ -397,10 +407,6 @@ func (c *connection) echo(t message.Topic, data interface{}) error {
 
 func (c *connection) On(Topic string, cb message.Func) {
 	topic := message.NewTopic(Topic)
-	if message.IsSysTopic(topic) {
-		log.Warn().Err(message.ErrNotAllowedTopic).Msg(Topic)
-		return
-	}
 	switch cb.(type) {
 	case message.FuncBlank:
 	case message.FuncInt:
@@ -454,9 +460,8 @@ func (c *connection) Wait() {
 
 func (c *connection) Disconnect(reason error) error {
 	if c.disconnected.SetTrue() {
+		c.server.Disconnect(c.id)
 		c.fireDisconnect()
-		c.server.CancelAll(c.id)
-		c.server.connections.Delete(c.id)
 		var err error
 		if reason != nil {
 			err = c.underline.Close(websocket.StatusAbnormalClosure, reason.Error())
@@ -465,6 +470,9 @@ func (c *connection) Disconnect(reason error) error {
 		}
 		if err != nil {
 			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			if websocket.CloseStatus(err) == websocket.StatusGoingAway {
 				return nil
 			}
 			if websocket.CloseStatus(err) != websocket.StatusNormalClosure {

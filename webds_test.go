@@ -10,10 +10,8 @@ type testHandler struct {
 	upgrade *Server
 }
 
-func (t *testHandler) init() {
-	t.upgrade = New(Config{
-		BinaryMessages: false,
-	})
+func (t *testHandler) init(c Config) {
+	t.upgrade = New(c)
 }
 
 func (t *testHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -23,15 +21,23 @@ func (t *testHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		log.HandlerErrs(err)
 		return
 	}
-	conn.OnInner("/inner/abc", func() {})
-	conn.OnInner("/inner/123", func() {})
 	conn.Wait()
 }
 
 func TestNew(t *testing.T) {
 	log.SetLevel(log.TraceLevel)
 	log.Info().Msg("start webds server")
+	c := Config{}
+	c.LateralMaster = []string{
+		"ws://127.0.0.1:8081",
+		"ws://127.0.0.1:8082",
+	}
+	go func() {
+		h := testHandler{}
+		h.init(c)
+		http.ListenAndServe(":8082", &h)
+	}()
 	h := testHandler{}
-	h.init()
-	http.ListenAndServe(":8080", &h)
+	h.init(c)
+	http.ListenAndServe(":8081", &h)
 }
