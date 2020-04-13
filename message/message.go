@@ -52,10 +52,11 @@ var (
 	// 连接权限验证
 	TopicAuth = NewTopic("/sys/auth")
 
-	// 声明自己是个同级节点
+	// 声明自己是个同级节点 同时声明自己的id
 	TopicLateral = NewTopic("/sys/lateral")
 	// 同步 同级可连接地址
-	TopicLateralIps = NewTopic("/sys/lateral/ips")
+	TopicLateralIps      = NewTopic("/sys/lateral/ips")
+	TopicLateralRedirect = NewTopic("/sys/lateral/redirect")
 	// 声明自己是个子级节点
 	TopicSuperior = NewTopic("/sys/Superior")
 	// 同步 父级可连接地址

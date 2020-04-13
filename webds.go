@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/lightjiang/utils"
 	"github.com/lightjiang/utils/log"
 	client "github.com/lightjiang/webds/client/go.client"
 	"github.com/lightjiang/webds/message"
@@ -20,22 +19,47 @@ const (
 	Version = "v0.2.3"
 )
 
+var seed = rand.New(rand.NewSource(time.Now().Unix()))
+
 type ConnectionFunc func(Connection) error
 
 type serverMaster struct {
-	isSuperior bool
-	url        string
-	id         string
-	latency    int
-	connIn     *connection
-	connOut    *specialConn
+	isSuperior    bool
+	url           string
+	id            string
+	latency       int
+	lastConnected time.Time
+	connIn        *connection
+	connOut       *specialConn
 }
 
 func (s *serverMaster) String() string {
 	return fmt.Sprintf("%s;%s;%v", s.url, s.id, s.isSuperior)
 }
 
-func newMasters(s []string, isSuperior bool) []*serverMaster {
+func (s *serverMaster) Alive(isOut bool) bool {
+	if s == nil {
+		return false
+	}
+	if isOut {
+		return s.connOut != nil && s.connOut.Alive()
+	} else {
+		return s.connIn != nil && s.connIn.Alive()
+	}
+}
+
+type Masters []*serverMaster
+
+func (m Masters) Search(url string) *serverMaster {
+	for _, c := range m {
+		if c.url == url || c.id == url {
+			return c
+		}
+	}
+	return nil
+}
+
+func newMasters(s []string, isSuperior bool) Masters {
 	if len(s) == 0 {
 		return nil
 	}
@@ -50,12 +74,13 @@ func newMasters(s []string, isSuperior bool) []*serverMaster {
 }
 
 type Server struct {
-	ctx    context.Context
-	master *serverMaster
+	ctx        context.Context
+	master     *serverMaster
+	masterChan chan *serverMaster
 	// record the url address of the superior masters
-	superiorMaster []*serverMaster
+	superiorMaster Masters
 	// record the url address of the lateral masters
-	lateralMaster         []*serverMaster
+	lateralMaster         Masters
 	config                Config
 	messageSerializer     *message.Serializer
 	connections           sync.Map // key = the Connection ID.
@@ -78,69 +103,166 @@ func New(cfg Config) *Server {
 	}
 	s.superiorMaster = newMasters(cfg.SuperiorMaster, true)
 	s.lateralMaster = newMasters(cfg.LateralMaster, false)
+	s.masterChan = make(chan *serverMaster, 5)
 	go func() {
+		ticker := time.NewTicker(time.Second * 10)
+		changed := false
 		for {
-			if s.master == nil {
-				isSync := false
-				// 检测有没有没有连入的同级节点
-				for _, c := range s.lateralMaster {
-					if c.connIn == nil {
-						isSync = true
+			select {
+			// 为空时取消master, 不为空时: 有连接则置为master, 无连接则尝试连接
+			case c := <-s.masterChan:
+				log.Warn().Msgf("%s: %+v", s.ID(), c)
+				// 仅在此处操作master
+				if c == nil {
+					if s.master != nil {
+						if s.master.connOut != nil {
+							s.master.connOut.Disconnect(nil)
+						}
+						s.master = nil
+					}
+				} else {
+					if c.connOut != nil {
+						if s.master != nil {
+							if s.master.url == c.url {
+								// 发送重复
+								break
+							}
+						}
+						if s.master != nil && s.master.connOut != nil {
+							s.master.connOut.Disconnect(nil)
+						}
+						s.master = c
+						changed = true
+						break
 					}
 				}
-				// 看有没有父级节点可以连接
-				if len(s.superiorMaster) != 0 {
-					isSync = true
+				nms := make([]*serverMaster, 0, 10)
+				if c != nil {
+					nms = append(nms, c)
 				}
-				if isSync {
-					s.syncMasters()
+				if len(s.lateralMaster) > 0 {
+					nms = append(nms, s.lateralMaster...)
+				}
+				if len(s.superiorMaster) > 0 {
+					nms = append(nms, s.superiorMaster...)
+				}
+				for _, c := range nms {
+					if c.connIn == nil && c.url != "" && time.Now().Sub(c.lastConnected) > time.Second*5 {
+						if c.isSuperior {
+							if s.connectSuperiorMasters(c) {
+								s.masterChan <- c
+								break
+							}
+						} else {
+							ifConnected, ifBreak := s.connectLateralMaster(c)
+							if ifBreak {
+								break
+							}
+							if ifConnected {
+								s.masterChan <- c
+								break
+							}
+						}
+					}
+				}
+			case <-ticker.C:
+				if s.master == nil {
+					s.masterChan <- nil
 				}
 			}
-			time.Sleep(time.Second)
+			if changed && s.master != nil {
+				changed = false
+			}
 		}
 	}()
+	time.Sleep(time.Duration(seed.Int63n(1000)) * time.Millisecond)
+	s.masterChan <- nil
 	return s
 }
 
-func (s *Server) syncMasters() {
-	log.Warn().Msgf("%d", rand.Int31n(1000))
-	time.Sleep(time.Duration(rand.Int63n(1000)) * time.Millisecond)
-	log.Warn().Msgf("\nlateral: \n%+v\n superior: \n%+v", s.lateralMaster, s.superiorMaster)
-	for _, c := range s.lateralMaster {
-		if s.master != nil {
-			return
-		}
-		if c.connIn != nil {
-			continue
-		}
-		temp := s.connectMaster(c)
-		if temp != nil {
-			break
-		}
+func (s *Server) connectSuperiorMasters(c *serverMaster) bool {
+	//conn := dialConn(s, c.url, 2)
+	cha := make(chan bool, 1)
+	select {
+	case b := <-cha:
+		return b
+	case <-time.After(time.Second * 3):
+		return false
 	}
 }
 
-func (s *Server) connectMaster(c *serverMaster) *serverMaster {
+func (s *Server) connectLateralMaster(c *serverMaster) (ifConnected bool, ifBreak bool) {
+	c.lastConnected = time.Now()
 	conn := dialConn(s, c.url, 1)
+	if conn == nil {
+		return
+	}
 	cha := make(chan bool, 1)
 	conn.OnConnect(func() {
+		// 声明 自己是个平级节点 尝试建立节点连接
 		conn.Pub(message.TopicLateral.String(), s.ID())
 	})
 	conn.Subscribe(message.TopicLateralIps.String(), func(res []byte) {
+		// 同步已知节点数据
 		log.Warn().Msg(string(res))
 	})
 	conn.Subscribe(message.TopicLateral.String(), func(res string) {
-		if res == "" {
-			s.master = c
+		// res 返回 非空字符串(对方id) 则建立连接成功
+		// 避免自己连接自己
+		if res == "" || res == s.ID() {
+			c.id = res
+			conn.Disconnect(nil)
+			cha <- false
+			return
 		}
-		log.Warn().Msg(res)
+		if !conn.Alive() {
+			return
+		}
+		_, ok := s.addConnection(conn)
+		if !ok {
+			conn.Disconnect(nil)
+			cha <- false
+			return
+		}
+		conn.OnDisconnect(func() {
+			s.Disconnect(conn.ID())
+		})
+		c.connOut = conn
+		c.id = res
+		cha <- true
+	})
+	conn.Subscribe(message.TopicLateralRedirect.String(), func(res string) {
+		if res != "" {
+			conn.Disconnect(nil)
+			temp := s.lateralMaster.Search(res)
+			if temp == nil {
+				log.Warn().Msgf("redirect new %s", res)
+				temp = &serverMaster{
+					isSuperior: false,
+					url:        res,
+				}
+				s.lateralMaster = append(s.lateralMaster, temp)
+			}
+			log.Warn().Msgf("redirect %s", res)
+			s.masterChan <- temp
+			ifBreak = true
+			cha <- false
+		}
+	})
+	conn.OnDisconnect(func() {
+		cha <- false
+		conn = nil
 	})
 	select {
-	case <-cha:
-	case <-time.After(time.Second * 5):
+	case b := <-cha:
+		ifConnected = b
+		return
+	case <-time.After(time.Second * 3):
+		c.connOut = nil
 		log.HandlerErrs(conn.Disconnect(nil))
+		log.Warn().Msg("close")
+		return
 	}
-	return nil
 }
 
 func (s *Server) ID() string {
@@ -312,15 +434,25 @@ func dialConn(s *Server, url string, typ uint) *specialConn {
 		ReadBufferSize:   s.config.ReadBufferSize,
 		WriteBufferSize:  s.config.WriteBufferSize,
 	})
-	_, ok := c.server.addConnection(c)
-	if !ok {
-		return nil
-	}
+	connChan := make(chan bool, 1)
+	c.Connection.OnConnect(func() {
+		connChan <- true
+	})
 	go func() {
-		err := c.Wait()
-		log.HandlerErrs(c.Disconnect(err), err)
+		defer func() {
+			if err := recover(); err != nil {
+				log.Error().Err(nil).Interface("panic", err).Msg("")
+			}
+		}()
+		log.HandlerErrs(c.Wait())
+		connChan <- false
+		close(connChan)
 	}()
-	return c
+	b := <-connChan
+	if b {
+		return c
+	}
+	return nil
 }
 
 type SampleConn interface {
@@ -329,6 +461,7 @@ type SampleConn interface {
 	Server() *Server
 	Type() uint
 	Disconnect(error) error
+	Alive() bool
 }
 
 var _ SampleConn = &specialConn{}
@@ -336,10 +469,9 @@ var _ SampleConn = &connection{}
 
 type specialConn struct {
 	client.Connection
-	server       *Server
-	typ          uint
-	disconnected utils.SafeBool
-	latency      int
+	server  *Server
+	typ     uint
+	latency int
 }
 
 // 0: client  1: lateral  2: superior
@@ -348,11 +480,7 @@ func (c *specialConn) Type() uint {
 }
 
 func (c *specialConn) Disconnect(err error) error {
-	if c.disconnected.SetTrue() {
-		c.server.Disconnect(c.ID())
-		return c.Close()
-	}
-	return nil
+	return c.Close()
 }
 
 func (c *specialConn) Server() *Server {

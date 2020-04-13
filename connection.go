@@ -74,6 +74,7 @@ type (
 
 		// 0: client  1: lateral 2: superior
 		Type() uint
+		Alive() bool
 	}
 
 	connection struct {
@@ -302,6 +303,11 @@ func (c *connection) messageReceived(data []byte) error {
 				if conn, ok := conn.(Connection); ok && conn != nil {
 					log.HandlerErrs(conn.Echo(message.TopicAuth.String(), "exit"), conn.Disconnect(nil))
 				}
+			case message.TopicLateral.String():
+				if c.server.master.Alive(true) && !c.server.master.isSuperior {
+					c.echo(message.TopicLateralRedirect, c.server.master.url)
+				}
+				c.echo(message.TopicLateral, c.server.ID())
 			default:
 				log.Warn().Err(message.ErrUnformedMsg).Msg(string(data))
 			}
@@ -487,4 +493,14 @@ func (c *connection) Disconnect(reason error) error {
 
 func (c *connection) Request() *http.Request {
 	return c.request
+}
+
+func (c *connection) Alive() bool {
+	if c == nil {
+		return false
+	}
+	if c.started.IfTrue() && !c.disconnected.IfTrue() {
+		return true
+	}
+	return false
 }

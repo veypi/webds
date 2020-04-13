@@ -53,6 +53,7 @@ type (
 		Echo(string, interface{}) error
 		Wait() error
 		Close() error
+		Alive() bool
 		io.Writer
 	}
 
@@ -183,7 +184,7 @@ func (c *connection) Close() error {
 }
 
 func (c *connection) startConnect() error {
-	log.Debug().Msg("start connect " + c.config.Host)
+	log.Debug().Msgf("%s start connect %s", c.id, c.config.Host)
 	conn, _, err := websocket.Dial(c.ctx, c.config.Host, &websocket.DialOptions{HTTPHeader: http.Header{"id": []string{c.id}}})
 	if err != nil {
 		return err
@@ -315,10 +316,19 @@ func (c *connection) ID() string {
 }
 
 func (c *connection) OnDisconnect(cb DisconnectFunc) {
+	if c.disconnected.IfTrue() {
+		// 如果已经断开连接则立即触发
+		cb()
+		return
+	}
 	c.onDisconnectListeners = append(c.onDisconnectListeners, cb)
 }
 
 func (c *connection) OnConnect(cb ConnectFunc) {
+	if c.started.IfTrue() {
+		cb()
+		return
+	}
 	c.onConnectListeners = append(c.onConnectListeners, cb)
 }
 
@@ -401,6 +411,7 @@ func (c *connection) subscribe(topic message.Topic) {
 // otherwise you don't have to call it because the `Handler()` does it automatically.
 func (c *connection) Wait() error {
 	if c.started.SetTrue() {
+		// 连接成功才有权写入数据
 		c.auth.Lock()
 		err := c.startConnect()
 		if err != nil {
@@ -417,4 +428,14 @@ func (c *connection) Wait() error {
 		return err
 	}
 	return nil
+}
+
+func (c *connection) Alive() bool {
+	if c == nil {
+		return false
+	}
+	if c.started.IfTrue() && !c.disconnected.IfTrue() {
+		return true
+	}
+	return false
 }
