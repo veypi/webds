@@ -294,7 +294,11 @@ func (c *connection) messageReceived(data []byte) error {
 			case message.TopicGetAllNodes.String():
 				res := ""
 				c.server.connections.Range(func(key, value interface{}) bool {
-					res += key.(string) + "\n"
+					if conn := value.(SampleConn); conn.ID() == c.server.ID() {
+						res += key.(string) + "->" + c.server.master.ID() + "\n"
+					} else {
+						res += key.(string) + "\n"
+					}
 					return true
 				})
 				log.HandlerErrs(c.echo(message.TopicGetAllNodes, res))
@@ -304,7 +308,8 @@ func (c *connection) messageReceived(data []byte) error {
 					log.HandlerErrs(conn.Echo(message.TopicAuth.String(), "exit"), conn.Disconnect(nil))
 				}
 			case message.TopicLateral.String():
-				if c.server.master.Alive(true) && !c.server.master.isSuperior {
+				// 如果本节点有向外连接的平级节点a,则通知下属的平级节点重定向至该平级节点a
+				if c.server.master.Alive() && !c.server.master.isSuperior {
 					c.echo(message.TopicLateralRedirect, c.server.master.url)
 				}
 				c.echo(message.TopicLateral, c.server.ID())
@@ -466,6 +471,7 @@ func (c *connection) Wait() {
 
 func (c *connection) Disconnect(reason error) error {
 	if c.disconnected.SetTrue() {
+		log.Debug().Msgf("%s -> %s disconnected", c.id, c.server.ID())
 		c.server.Disconnect(c.id)
 		c.fireDisconnect()
 		var err error

@@ -29,23 +29,26 @@ type serverMaster struct {
 	id            string
 	latency       int
 	lastConnected time.Time
-	connIn        *connection
-	connOut       *specialConn
+	// 存储向外的连接
+	conn *specialConn
 }
 
 func (s *serverMaster) String() string {
 	return fmt.Sprintf("%s;%s;%v", s.url, s.id, s.isSuperior)
 }
 
-func (s *serverMaster) Alive(isOut bool) bool {
+func (s *serverMaster) ID() string {
+	if s == nil {
+		return ""
+	}
+	return s.id
+}
+
+func (s *serverMaster) Alive() bool {
 	if s == nil {
 		return false
 	}
-	if isOut {
-		return s.connOut != nil && s.connOut.Alive()
-	} else {
-		return s.connIn != nil && s.connIn.Alive()
-	}
+	return s.conn != nil && s.conn.Alive()
 }
 
 type Masters []*serverMaster
@@ -104,6 +107,9 @@ func New(cfg Config) *Server {
 	s.superiorMaster = newMasters(cfg.SuperiorMaster, true)
 	s.lateralMaster = newMasters(cfg.LateralMaster, false)
 	s.masterChan = make(chan *serverMaster, 5)
+	if !cfg.EnableCluster {
+		return s
+	}
 	go func() {
 		ticker := time.NewTicker(time.Second * 10)
 		changed := false
@@ -111,27 +117,32 @@ func New(cfg Config) *Server {
 			select {
 			// 为空时取消master, 不为空时: 有连接则置为master, 无连接则尝试连接
 			case c := <-s.masterChan:
-				log.Warn().Msgf("%s: %+v", s.ID(), c)
+				if c == nil {
+					log.Debug().Msg(s.ID() + " try to connect to its master")
+				} else {
+					log.Debug().Msg(s.ID() + " try to connect to " + c.String())
+				}
 				// 仅在此处操作master
 				if c == nil {
-					if s.master != nil {
-						if s.master.connOut != nil {
-							s.master.connOut.Disconnect(nil)
-						}
-						s.master = nil
+					// 置空
+					if s.master.Alive() {
+						s.master.conn.Disconnect(nil)
 					}
+					s.master = nil
 				} else {
-					if c.connOut != nil {
+					// 仅在该处写入s.master
+					if c.conn != nil {
 						if s.master != nil {
 							if s.master.url == c.url {
 								// 发送重复
 								break
 							}
 						}
-						if s.master != nil && s.master.connOut != nil {
-							s.master.connOut.Disconnect(nil)
+						if s.master.Alive() {
+							s.master.conn.Disconnect(nil)
 						}
 						s.master = c
+						log.Warn().Msgf("%s succeed to set {%s} as its master", s.ID(), c.String())
 						changed = true
 						break
 					}
@@ -147,7 +158,7 @@ func New(cfg Config) *Server {
 					nms = append(nms, s.superiorMaster...)
 				}
 				for _, c := range nms {
-					if c.connIn == nil && c.url != "" && time.Now().Sub(c.lastConnected) > time.Second*5 {
+					if c.url != "" && c.id != s.ID() && time.Now().Sub(c.lastConnected) > time.Second*5 {
 						if c.isSuperior {
 							if s.connectSuperiorMasters(c) {
 								s.masterChan <- c
@@ -227,7 +238,7 @@ func (s *Server) connectLateralMaster(c *serverMaster) (ifConnected bool, ifBrea
 		conn.OnDisconnect(func() {
 			s.Disconnect(conn.ID())
 		})
-		c.connOut = conn
+		c.conn = conn
 		c.id = res
 		cha <- true
 	})
@@ -243,9 +254,11 @@ func (s *Server) connectLateralMaster(c *serverMaster) (ifConnected bool, ifBrea
 				}
 				s.lateralMaster = append(s.lateralMaster, temp)
 			}
-			log.Warn().Msgf("redirect %s", res)
-			s.masterChan <- temp
-			ifBreak = true
+			if temp.id != s.ID() {
+				log.Warn().Msgf("redirect %s", res)
+				s.masterChan <- temp
+				ifBreak = true
+			}
 			cha <- false
 		}
 	})
@@ -258,7 +271,7 @@ func (s *Server) connectLateralMaster(c *serverMaster) (ifConnected bool, ifBrea
 		ifConnected = b
 		return
 	case <-time.After(time.Second * 3):
-		c.connOut = nil
+		c.conn = nil
 		log.HandlerErrs(conn.Disconnect(nil))
 		log.Warn().Msg("close")
 		return
@@ -444,7 +457,7 @@ func dialConn(s *Server, url string, typ uint) *specialConn {
 				log.Error().Err(nil).Interface("panic", err).Msg("")
 			}
 		}()
-		log.HandlerErrs(c.Wait())
+		c.Wait()
 		connChan <- false
 		close(connChan)
 	}()
@@ -459,6 +472,7 @@ type SampleConn interface {
 	ID() string
 	io.Writer
 	Server() *Server
+	// 0: client  1: lateral 2: superior
 	Type() uint
 	Disconnect(error) error
 	Alive() bool

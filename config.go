@@ -52,6 +52,7 @@ type Config struct {
 	SuperiorMaster []string
 	// record the url address of the lateral masters
 	LateralMaster []string
+	EnableCluster bool
 	// EvtMessagePrefix is the prefix of the underline websocket events that are being established under the hoods.
 	// This prefix is visible only to the javascript side (code) and it has nothing to do
 	// with the message that the end-user receives.

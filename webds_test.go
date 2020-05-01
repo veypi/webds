@@ -15,7 +15,6 @@ func (t *testHandler) init(c Config) {
 }
 
 func (t *testHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	log.Info().Msgf("%s: receive %s", t.upgrade.ID(), r.Header.Get("id"))
 	conn, err := t.upgrade.Upgrade(w, r)
 	if err != nil {
 		log.HandlerErrs(err)
@@ -27,25 +26,25 @@ func (t *testHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func TestNew(t *testing.T) {
 	log.SetLevel(log.TraceLevel)
 	log.Info().Msg("start webds server")
-	ch := make(chan bool, 1)
 	c := Config{}
+	c.EnableCluster = true
 	c.IDGenerator = func(r *http.Request) string {
-		return r.Header.Get("id") + "1"
+		return r.Header.Get("id")
 	}
-	c.ID = "8081"
 	c.LateralMaster = []string{
 		"ws://127.0.0.1:8081",
 		"ws://127.0.0.1:8082",
+		"ws://127.0.0.1:8083",
 	}
-	go func(c Config) {
+	newC := func(c Config) {
 		h := testHandler{}
 		h.init(c)
-		ch <- true
-		http.ListenAndServe(":8081", &h)
-	}(c)
-	<-ch
-	h := testHandler{}
+		http.ListenAndServe(":"+c.ID, &h)
+	}
+	c.ID = "8081"
+	go newC(c)
 	c.ID = "8082"
-	h.init(c)
-	http.ListenAndServe(":8082", &h)
+	newC(c)
+	//c.ID = "8083"
+	//newC(c)
 }

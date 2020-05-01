@@ -250,7 +250,7 @@ func (c *connection) messageReceive(data []byte) {
 			case message.TopicAuth.String():
 				if s, ok := customMessage.(string); ok && s == "pass" {
 					c.auth.Unlock()
-					log.Debug().Msg("auth pass")
+					log.Debug().Msgf("%s connected to %s succeed", c.id, c.config.Host)
 					c.fireConnect()
 				} else if s == "exit" {
 					log.Info().Msg(s)
@@ -343,7 +343,6 @@ func (c *connection) FireOnError(err error) {
 }
 
 func (c *connection) fireDisconnect() {
-	log.Debug().Msg("disconnected.")
 	for _, fc := range c.onDisconnectListeners {
 		fc()
 	}
