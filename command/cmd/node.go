@@ -30,7 +30,7 @@ var Node = cli.Command{
 func runNodeList(c *cli.Context) error {
 	conn := newConn(c)
 	conn.OnConnect(func() {
-		log.HandlerErrs(conn.Pub(message.TopicGetAllNodes.String(), ""))
+		conn.Echo(message.TopicGetAllNodes.String(), "")
 	})
 	conn.Subscribe(message.TopicGetAllNodes.String(), func(data interface{}) {
 		fmt.Print(data)
@@ -47,7 +47,7 @@ func runStopNode(c *cli.Context) error {
 	conn := newConn(c)
 	conn.OnConnect(func() {
 		for _, v := range c.Args() {
-			log.HandlerErrs(conn.Pub(message.TopicStopNode.String(), v))
+			conn.Echo(message.TopicStopNode.String(), v)
 		}
 		log.HandlerErrs(conn.Close())
 	})

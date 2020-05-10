@@ -41,6 +41,11 @@ Distributed System with websocket
         参照ros命令行设计：形如
             - webds topic list/pub/sub
             - webds node list/stop
+
+- 选举步骤
+    - 交换id
+    - 交换信息
+    - 请求是否跳转 不跳转则建立成功
         
 ## TODO
 
@@ -56,6 +61,7 @@ Distributed System with websocket
 
 ## update
 
+- v0.2.4 同级节点选举过程完成
 - v0.2.3 修改了消息协议 完善分布式设计思路
 - v0.2.2 修改了OnConnection的回调函数, 若回调函数返回error, 则 conn 直接关闭, 该功能可用于鉴定权限. 优化消息解析代码. 初步开始设计分布式结构.
 - v0.2.1 添加webds node list/stop 指令

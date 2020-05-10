@@ -17,6 +17,7 @@ type (
 	Func         interface{}
 	FuncInt      = func(int)
 	FuncString   = func(string)
+	FuncError    = func(error)
 	FuncBlank    = func()
 	FuncBytes    = func([]byte)
 	FuncBool     = func(bool)
@@ -35,6 +36,10 @@ const (
 )
 
 var (
+	// 日志
+	TopicSysLog = NewTopic("/sys/log")
+	// 连接权限验证
+	TopicAuth = NewTopic("/sys/auth")
 	// 订阅指令
 	TopicSubscribe = NewTopic("/sys/subscribe")
 	// 取消订阅指令
@@ -47,20 +52,16 @@ var (
 	TopicGetAllNodes  = NewTopic("/sys/admin/get_all_nodes")
 	TopicStopNode     = NewTopic("/sys/admin/stop_node")
 
-	// 日志
-	TopicSysLog = NewTopic("/sys/log")
-	// 连接权限验证
-	TopicAuth = NewTopic("/sys/auth")
-
+	// 共享集群信息
+	TopicClusterIps = NewTopic("/sys/cluster/ips")
 	// 声明自己是个同级节点 同时声明自己的id
-	TopicLateral = NewTopic("/sys/lateral")
-	// 同步 同级可连接地址
-	TopicLateralIps      = NewTopic("/sys/lateral/ips")
-	TopicLateralRedirect = NewTopic("/sys/lateral/redirect")
+	TopicLateral         = NewTopic("/sys/cluster/lateral")
+	TopicLateralRedirect = NewTopic("/sys/cluster/lateral/redirect")
+
 	// 声明自己是个子级节点
-	TopicSuperior = NewTopic("/sys/Superior")
+	TopicSuperior = NewTopic("/sys/cluster/Superior")
 	// 同步 父级可连接地址
-	TopicSuperiorIps = NewTopic("/sys/Superior/ips")
+	TopicSuperiorIps = NewTopic("/sys/cluster/Superior/ips")
 )
 
 var (
@@ -304,9 +305,9 @@ func (ms *Serializer) Serialize(t Topic, data interface{}) ([]byte, error) {
 // such as  prefix;topic;0;abc_msg
 // Supported data types are: string, int, bool, bytes and JSON.
 // 格式: prefix(n)type(1)random_tag(4)source_idx(4)target_topic;msg
-func (ms *Serializer) Deserialize(websocketMessage []byte) (interface{}, MsgType, error) {
+func (ms *Serializer) Deserialize(websocketMessage []byte) (interface{}, error) {
 	if len(websocketMessage) < ms.targetIdx {
-		return nil, ' ', InvalidMessage
+		return nil, InvalidMessage
 	}
 	typ := websocketMessage[ms.typeIdx]
 	var data []byte
@@ -318,29 +319,33 @@ func (ms *Serializer) Deserialize(websocketMessage []byte) (interface{}, MsgType
 	}
 	switch typ {
 	case MsgTypeString:
-		return *(*string)(unsafe.Pointer(&data)), MsgTypeString, nil
+		return *(*string)(unsafe.Pointer(&data)), nil
 	case MsgTypeInt:
 		msg, err := strconv.Atoi(*(*string)(unsafe.Pointer(&data)))
 		if err != nil {
 			log.HandlerErrs(err)
-			return nil, ' ', InvalidMessage
+			return nil, InvalidMessage
 		}
-		return msg, MsgTypeInt, nil
+		return msg, nil
 	case MsgTypeBool:
 		if bytes.Equal(data, boolTrue) {
-			return true, MsgTypeBool, nil
+			return true, nil
 		}
-		return false, MsgTypeBool, nil
+		return false, nil
 	case MsgTypeBytes:
-		return data, MsgTypeBytes, nil
+		return data, nil
 	case MsgTypeJSON:
-		return data, MsgTypeJSON, nil
+		return data, nil
 		//var msg interface{}
 		//err := json.Unmarshal(data, &msg)
 		//return msg, err
 	default:
-		return nil, ' ', InvalidMessage
+		return nil, InvalidMessage
 	}
+}
+
+func (ms *Serializer) GetMsgType(msg []byte) MsgType {
+	return msg[ms.typeIdx]
 }
 
 // getWebsocketCustomEvent return empty string when the websocketMessage is native message

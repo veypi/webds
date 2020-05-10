@@ -17,9 +17,9 @@ import (
 
 type (
 	// DisconnectFunc is the callback which is fired when a client/connection closed
-	DisconnectFunc func()
+	DisconnectFunc = message.FuncBlank
 	// ErrorFunc is the callback which fires whenever an error occurs
-	ErrorFunc func(error)
+	ErrorFunc = message.FuncError
 	// Connection is the front-end API that you will use to communicate with the client side
 	Connection interface {
 		// ID returns the connection's identifier
@@ -34,9 +34,9 @@ type (
 		Server() *Server
 
 		// OnDisconnect registers a callback which is fired when this connection is closed by an error or manual
-		OnDisconnect(DisconnectFunc)
+		OnDisconnect(DisconnectFunc) message.Subscriber
 		// OnError registers a callback which fires when this connection occurs an error
-		OnError(ErrorFunc)
+		OnError(ErrorFunc) message.Subscriber
 		// OnPing  registers a callback which fires on each ping
 		// It does nothing more than firing the OnError listeners. It doesn't send anything to the client.
 		FireOnError(err error)
@@ -44,14 +44,14 @@ type (
 		// returns an Publisher to send messages.
 		// Broadcast to any node which subscribe this topic.
 		// 发布给订阅主题的所有节点
-		Publisher(string) Publisher
+		Publisher(string) message.Publisher
 		// On registers a callback to a particular topic which is fired when a message to this topic is received
 		// just for topic with prefix '/inner'
 		// 注册某些话题的回调事件
-		On(topic string, callback message.Func)
+		On(topic string, callback message.Func) message.Subscriber
 
 		// only send to the node of this conn
-		Echo(topic string, data interface{}) error
+		Echo(topic string, data interface{})
 
 		// subscribe registers this connection to a topic, if it doesn't exist then it creates a new.
 		// One topic can have one or more connections. One connection can subscribe many topics.
@@ -70,7 +70,8 @@ type (
 		Wait()
 		// Disconnect disconnects the client, close the underline websocket conn and removes it from the conn list
 		// returns the error, if any, from the underline connection
-		Disconnect(error) error
+		io.Closer
+		io.Writer
 
 		// 0: client  1: lateral 2: superior
 		Type() uint
@@ -86,10 +87,9 @@ type (
 		typ                   uint
 		messageType           websocket.MessageType
 		disconnected          utils.SafeBool
-		onDisconnectListeners []DisconnectFunc
-		onErrorListeners      []ErrorFunc
-		onTopicListeners      map[string][]message.Func
-		subscribed            []string
+		onDisconnectListeners message.SubscriberList
+		onErrorListeners      message.SubscriberList
+		onTopicListeners      map[string]message.SubscriberList
 		// mu for self object write/read
 		selfMU  sync.RWMutex
 		started utils.SafeBool
@@ -146,10 +146,9 @@ func acquireConn(s *Server, w http.ResponseWriter, r *http.Request) (*connection
 	} else {
 		log.HandlerErrs(c.echo(message.TopicAuth, "pass"))
 	}
-	c.onDisconnectListeners = make([]DisconnectFunc, 0)
-	c.onErrorListeners = make([]ErrorFunc, 0)
-	c.onTopicListeners = make(map[string][]message.Func, 0)
-	c.subscribed = make([]string, 5)
+	c.onDisconnectListeners = message.NewSubscriberList()
+	c.onErrorListeners = message.NewSubscriberList()
+	c.onTopicListeners = make(map[string]message.SubscriberList, 0)
 	c.started.ForceSetFalse()
 	c.disconnected.ForceSetFalse()
 	return c, nil
@@ -179,7 +178,7 @@ func (c *connection) write(websocketMessageType websocket.MessageType, data []by
 	err := c.underline.Write(ctx, websocketMessageType, data)
 	if err != nil {
 		// if failed then the connection is off, fire the disconnect
-		log.HandlerErrs(c.Disconnect(err))
+		log.HandlerErrs(err, c.Close())
 		return 0, err
 	}
 	return len(data), nil
@@ -217,7 +216,7 @@ func (c *connection) startReader() {
 	conn.SetReadLimit(c.server.config.MaxMessageSize)
 
 	defer func() {
-		log.HandlerErrs(c.Disconnect(nil))
+		log.HandlerErrs(c.Close())
 	}()
 
 	for {
@@ -264,7 +263,7 @@ func (c *connection) messageReceived(data []byte) error {
 				log.Warn().Str("addr", c.request.RemoteAddr).Str("topic", topic.String()).Msg("receive invalid admin command")
 				return nil
 			}
-			customMessage, _, err := c.server.messageSerializer.Deserialize(data)
+			customMessage, err := c.server.messageSerializer.Deserialize(data)
 			if err != nil {
 				return err
 			}
@@ -305,14 +304,33 @@ func (c *connection) messageReceived(data []byte) error {
 			case message.TopicStopNode.String():
 				conn := c.server.getConnection(customMessage.(string))
 				if conn, ok := conn.(Connection); ok && conn != nil {
-					log.HandlerErrs(conn.Echo(message.TopicAuth.String(), "exit"), conn.Disconnect(nil))
+					conn.Echo(message.TopicAuth.String(), "exit")
+					conn.Close()
 				}
+			case message.TopicClusterIps.String():
+				if temp, ok := customMessage.(string); ok && temp != "" {
+					c.server.updateClusterInfo(temp)
+				}
+				c.echo(message.TopicClusterIps, c.server.getClusterInfo())
 			case message.TopicLateral.String():
 				// 如果本节点有向外连接的平级节点a,则通知下属的平级节点重定向至该平级节点a
+				c.echo(message.TopicLateral, c.server.ID())
+			case message.TopicLateralRedirect.String():
 				if c.server.master.Alive() && !c.server.master.isSuperior {
 					c.echo(message.TopicLateralRedirect, c.server.master.url)
+				} else if customMessage.(string) == c.server.ID() {
+					c.echo(message.TopicLateralRedirect, "")
+					c.Close()
+				} else {
+					c.echo(message.TopicLateralRedirect, "")
+					if c.server.lateralConns == nil {
+						c.server.lateralConns = make(map[string]Connection)
+					}
+					c.server.lateralConns[customMessage.(string)] = c
+					c.OnDisconnect(func() {
+						delete(c.server.lateralConns, customMessage.(string))
+					}).SetOnce()
 				}
-				c.echo(message.TopicLateral, c.server.ID())
 			default:
 				log.Warn().Err(message.ErrUnformedMsg).Msg(string(data))
 			}
@@ -323,50 +341,16 @@ func (c *connection) messageReceived(data []byte) error {
 		}
 		// 触发本地的监听函数
 		listeners, ok := c.onTopicListeners[topic.String()]
-		if !ok || len(listeners) == 0 {
+		if !ok || listeners.Len() == 0 {
 			return nil // if not listeners for this event exit from here
 		}
-		customMessage, msgType, err := c.server.messageSerializer.Deserialize(data)
+		customMessage, err := c.server.messageSerializer.Deserialize(data)
 		if err != nil {
 			return err
 		}
-		for _, item := range listeners {
-			doIt := false
-			switch cb := item.(type) {
-			case message.FuncBlank:
-				cb()
-				doIt = true
-			case message.FuncInt:
-				if msgType == message.MsgTypeInt {
-					cb(customMessage.(int))
-					doIt = true
-				}
-			case message.FuncString:
-				if msgType == message.MsgTypeString {
-					cb(customMessage.(string))
-					doIt = true
-				}
-			case message.FuncBytes:
-				if msgType == message.MsgTypeBytes || msgType == message.MsgTypeJSON {
-					cb(customMessage.([]byte))
-					doIt = true
-				}
-			case message.FuncBool:
-				if msgType == message.MsgTypeBool {
-					cb(customMessage.(bool))
-					doIt = true
-				}
-			case message.FuncDefault:
-				cb(customMessage)
-				doIt = true
-			default:
-				log.Warn().Str("id", c.id).Str("topic", topic.String()).Msg(" register a invalid callback func")
-				return nil
-			}
-			if !doIt {
-				log.Warn().Str("id", c.id).Str("topic", topic.String()).Msg("receive a msg but not find appropriate func to handle it")
-			}
-		}
+		listeners.Range(func(s message.Subscriber) {
+			s.Do(customMessage)
+		})
 		return nil
 
 	} else {
@@ -383,28 +367,32 @@ func (c *connection) Server() *Server {
 }
 
 func (c *connection) fireDisconnect() {
-	for i := range c.onDisconnectListeners {
-		c.onDisconnectListeners[i]()
-	}
+	c.onDisconnectListeners.Range(func(s message.Subscriber) {
+		s.Do(nil)
+	})
 }
 
-func (c *connection) OnDisconnect(cb DisconnectFunc) {
-	c.onDisconnectListeners = append(c.onDisconnectListeners, cb)
+func (c *connection) OnDisconnect(cb DisconnectFunc) message.Subscriber {
+	return c.onDisconnectListeners.Add(cb)
 }
 
-func (c *connection) OnError(cb ErrorFunc) {
-	c.onErrorListeners = append(c.onErrorListeners, cb)
+func (c *connection) OnError(cb ErrorFunc) message.Subscriber {
+	return c.onErrorListeners.Add(cb)
 }
 
 func (c *connection) FireOnError(err error) {
-	for _, cb := range c.onErrorListeners {
-		cb(err)
-	}
+	c.onErrorListeners.Range(func(s message.Subscriber) {
+		s.Do(err)
+	})
 }
 
-func (c *connection) Echo(Topic string, data interface{}) error {
+func (c *connection) Echo(Topic string, data interface{}) {
 	topic := message.NewTopic(Topic)
-	return c.echo(topic, data)
+	if message.IsPublicTopic(topic) {
+		log.HandlerErrs(message.ErrNotAllowedTopic)
+		return
+	}
+	log.HandlerErrs(c.echo(topic, data))
 }
 
 func (c *connection) echo(t message.Topic, data interface{}) error {
@@ -413,29 +401,19 @@ func (c *connection) echo(t message.Topic, data interface{}) error {
 		return err
 	}
 	_, err = c.Write(msg)
+
 	return err
 }
 
-func (c *connection) On(Topic string, cb message.Func) {
+func (c *connection) On(Topic string, cb message.Func) message.Subscriber {
 	topic := message.NewTopic(Topic)
-	switch cb.(type) {
-	case message.FuncBlank:
-	case message.FuncInt:
-	case message.FuncString:
-	case message.FuncBytes:
-	case message.FuncDefault:
-	case message.FuncBool:
-	default:
-		log.Warn().Str("id", c.id).Str("topic", Topic).Msg(" register a invalid callback func")
-		return
-	}
 	if c.onTopicListeners[topic.String()] == nil {
-		c.onTopicListeners[topic.String()] = make([]message.Func, 0)
+		c.onTopicListeners[topic.String()] = message.NewSubscriberList()
 	}
-	c.onTopicListeners[topic.String()] = append(c.onTopicListeners[topic.String()], cb)
+	return c.onTopicListeners[topic.String()].Add(cb)
 }
 
-func (c *connection) Publisher(topic string) Publisher {
+func (c *connection) Publisher(topic string) message.Publisher {
 	return newPublisher(c, message.NewTopic(topic))
 }
 
@@ -469,17 +447,12 @@ func (c *connection) Wait() {
 	}
 }
 
-func (c *connection) Disconnect(reason error) error {
+func (c *connection) Close() error {
 	if c.disconnected.SetTrue() {
 		log.Debug().Msgf("%s -> %s disconnected", c.id, c.server.ID())
 		c.server.Disconnect(c.id)
 		c.fireDisconnect()
-		var err error
-		if reason != nil {
-			err = c.underline.Close(websocket.StatusAbnormalClosure, reason.Error())
-		} else {
-			err = c.underline.Close(websocket.StatusNormalClosure, "")
-		}
+		err := c.underline.Close(websocket.StatusNormalClosure, "")
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return nil

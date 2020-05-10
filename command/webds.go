@@ -33,6 +33,7 @@ func main() {
 	app.Commands = []cli.Command{
 		cmd.Topic,
 		cmd.Node,
+		cmd.Cluster,
 	}
 	app.Before = func(c *cli.Context) error {
 		logLevel := c.String("log_level")

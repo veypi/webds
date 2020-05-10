@@ -11,12 +11,13 @@ import (
 	"io"
 	"math/rand"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
 
 const (
-	Version = "v0.2.3"
+	Version = "v0.2.4"
 )
 
 var seed = rand.New(rand.NewSource(time.Now().Unix()))
@@ -29,6 +30,8 @@ type serverMaster struct {
 	id            string
 	latency       int
 	lastConnected time.Time
+	redirect      *serverMaster
+	failedCount   uint
 	// 存储向外的连接
 	conn *specialConn
 }
@@ -42,6 +45,25 @@ func (s *serverMaster) ID() string {
 		return ""
 	}
 	return s.id
+}
+
+func (s *serverMaster) TryConnect(hostID string) bool {
+	if s.url == "" {
+		return false
+	}
+	if hostID == s.id {
+		return false
+	}
+	if time.Now().Sub(s.lastConnected) < time.Second*5 {
+		return false
+	}
+	if s.redirect != nil && time.Now().Sub(s.lastConnected) < time.Second*60 {
+		return false
+	}
+	if s.failedCount > 5 && time.Now().Sub(s.lastConnected) < time.Minute {
+		return false
+	}
+	return true
 }
 
 func (s *serverMaster) Alive() bool {
@@ -77,13 +99,15 @@ func newMasters(s []string, isSuperior bool) Masters {
 }
 
 type Server struct {
-	ctx        context.Context
-	master     *serverMaster
-	masterChan chan *serverMaster
+	ctx          context.Context
+	master       *serverMaster
+	masterStable bool
+	masterChan   chan *serverMaster
 	// record the url address of the superior masters
 	superiorMaster Masters
 	// record the url address of the lateral masters
 	lateralMaster         Masters
+	lateralConns          map[string]Connection
 	config                Config
 	messageSerializer     *message.Serializer
 	connections           sync.Map // key = the Connection ID.
@@ -112,7 +136,6 @@ func New(cfg Config) *Server {
 	}
 	go func() {
 		ticker := time.NewTicker(time.Second * 10)
-		changed := false
 		for {
 			select {
 			// 为空时取消master, 不为空时: 有连接则置为master, 无连接则尝试连接
@@ -126,7 +149,7 @@ func New(cfg Config) *Server {
 				if c == nil {
 					// 置空
 					if s.master.Alive() {
-						s.master.conn.Disconnect(nil)
+						s.master.conn.Close()
 					}
 					s.master = nil
 				} else {
@@ -139,11 +162,15 @@ func New(cfg Config) *Server {
 							}
 						}
 						if s.master.Alive() {
-							s.master.conn.Disconnect(nil)
+							s.master.conn.Close()
 						}
 						s.master = c
+						s.masterStable = true
+						c.conn.OnDisconnect(func() {
+							s.masterStable = false
+							s.masterChan <- nil
+						})
 						log.Warn().Msgf("%s succeed to set {%s} as its master", s.ID(), c.String())
-						changed = true
 						break
 					}
 				}
@@ -158,7 +185,7 @@ func New(cfg Config) *Server {
 					nms = append(nms, s.superiorMaster...)
 				}
 				for _, c := range nms {
-					if c.url != "" && c.id != s.ID() && time.Now().Sub(c.lastConnected) > time.Second*5 {
+					if c.TryConnect(s.ID()) {
 						if c.isSuperior {
 							if s.connectSuperiorMasters(c) {
 								s.masterChan <- c
@@ -177,18 +204,90 @@ func New(cfg Config) *Server {
 					}
 				}
 			case <-ticker.C:
-				if s.master == nil {
-					s.masterChan <- nil
+				if !s.masterStable {
+					if s.master == nil || !s.master.Alive() {
+						if len(s.superiorMaster) == 0 {
+							stable := true
+							for _, c := range s.lateralMaster {
+								if c.id != s.ID() && c.failedCount <= 5 && c.redirect == nil {
+									stable = false
+								}
+							}
+							if stable {
+								log.Warn().Msg("stable cluster")
+							}
+							s.masterStable = stable
+						}
+						if !s.masterStable {
+							s.masterChan <- nil
+						}
+					}
 				}
-			}
-			if changed && s.master != nil {
-				changed = false
 			}
 		}
 	}()
 	time.Sleep(time.Duration(seed.Int63n(1000)) * time.Millisecond)
 	s.masterChan <- nil
 	return s
+}
+
+func (s *Server) getClusterInfo() string {
+	res := ""
+	for _, temp := range s.superiorMaster {
+		res += fmt.Sprintf("%s,%s,%v\n", temp.url, temp.id, temp.isSuperior)
+	}
+	for _, temp := range s.lateralMaster {
+		res += fmt.Sprintf("%s,%s,%v\n", temp.url, temp.id, temp.isSuperior)
+	}
+	return res
+}
+
+func (s *Server) updateClusterInfo(info string) {
+	for _, l := range strings.Split(info, "\n") {
+		if p := strings.Split(l, ","); len(p) == 3 {
+			url, id, isSuperior := p[0], p[1], p[2]
+			founded := false
+			if isSuperior == "true" {
+				for _, c := range s.superiorMaster {
+					if c.id == id {
+						founded = true
+						break
+					}
+					if c.url == url {
+						founded = true
+						if c.id == "" {
+							c.id = id
+						}
+					}
+				}
+			} else {
+				for _, c := range s.lateralMaster {
+					if c.id == id {
+						founded = true
+						break
+					}
+					if c.url == url {
+						founded = true
+						if c.id == "" {
+							c.id = id
+						}
+					}
+				}
+			}
+			if !founded {
+				nc := &serverMaster{
+					url: url,
+					id:  id,
+				}
+				if isSuperior == "true" {
+					nc.isSuperior = true
+					s.superiorMaster = append(s.superiorMaster, nc)
+				} else {
+					s.lateralMaster = append(s.lateralMaster, nc)
+				}
+			}
+		}
+	}
 }
 
 func (s *Server) connectSuperiorMasters(c *serverMaster) bool {
@@ -206,45 +305,30 @@ func (s *Server) connectLateralMaster(c *serverMaster) (ifConnected bool, ifBrea
 	c.lastConnected = time.Now()
 	conn := dialConn(s, c.url, 1)
 	if conn == nil {
+		c.failedCount++
 		return
 	}
+	c.failedCount = 0
 	cha := make(chan bool, 1)
 	conn.OnConnect(func() {
 		// 声明 自己是个平级节点 尝试建立节点连接
-		conn.Pub(message.TopicLateral.String(), s.ID())
+		conn.Echo(message.TopicLateral.String(), s.ID())
 	})
-	conn.Subscribe(message.TopicLateralIps.String(), func(res []byte) {
-		// 同步已知节点数据
-		log.Warn().Msg(string(res))
-	})
+	// 交换id
 	conn.Subscribe(message.TopicLateral.String(), func(res string) {
-		// res 返回 非空字符串(对方id) 则建立连接成功
-		// 避免自己连接自己
-		if res == "" || res == s.ID() {
-			c.id = res
-			conn.Disconnect(nil)
-			cha <- false
-			return
-		}
-		if !conn.Alive() {
-			return
-		}
-		_, ok := s.addConnection(conn)
-		if !ok {
-			conn.Disconnect(nil)
-			cha <- false
-			return
-		}
-		conn.OnDisconnect(func() {
-			s.Disconnect(conn.ID())
-		})
-		c.conn = conn
 		c.id = res
-		cha <- true
+		conn.Echo(message.TopicClusterIps.String(), s.getClusterInfo())
+	}).SetOnce()
+	// 交换集群信息
+	conn.Subscribe(message.TopicClusterIps.String(), func(res string) {
+		// 同步已知节点数据
+		s.updateClusterInfo(res)
+		conn.Echo(message.TopicLateralRedirect.String(), s.ID())
 	})
+	// 请求是否跳转
 	conn.Subscribe(message.TopicLateralRedirect.String(), func(res string) {
 		if res != "" {
-			conn.Disconnect(nil)
+			conn.Close()
 			temp := s.lateralMaster.Search(res)
 			if temp == nil {
 				log.Warn().Msgf("redirect new %s", res)
@@ -254,25 +338,46 @@ func (s *Server) connectLateralMaster(c *serverMaster) (ifConnected bool, ifBrea
 				}
 				s.lateralMaster = append(s.lateralMaster, temp)
 			}
+			c.redirect = temp
 			if temp.id != s.ID() {
 				log.Warn().Msgf("redirect %s", res)
 				s.masterChan <- temp
 				ifBreak = true
 			}
 			cha <- false
+		} else if c.id == s.ID() {
+			// 连接到本机
+			conn.Close()
+			cha <- false
+		} else {
+			_, ok := s.addConnection(conn)
+			if !ok {
+				conn.Close()
+				cha <- false
+				return
+			}
+			conn.OnDisconnect(func() {
+				s.Disconnect(conn.ID())
+			})
+			c.conn = conn
+			cha <- true
+			for _, tempC := range s.lateralConns {
+				tempC.Echo(message.TopicLateralRedirect.String(), c.url)
+				tempC.Close()
+			}
 		}
-	})
-	conn.OnDisconnect(func() {
+	}).SetOnce()
+	defer conn.OnDisconnect(func() {
 		cha <- false
 		conn = nil
-	})
+	}).Cancel()
 	select {
 	case b := <-cha:
 		ifConnected = b
 		return
 	case <-time.After(time.Second * 3):
 		c.conn = nil
-		log.HandlerErrs(conn.Disconnect(nil))
+		log.HandlerErrs(conn.Close())
 		log.Warn().Msg("close")
 		return
 	}
@@ -292,7 +397,7 @@ func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (Connection, er
 		err = s.onConnectionListeners[i](c)
 		if err != nil {
 			c.Echo(message.TopicSysLog.String(), err.Error())
-			c.Disconnect(nil)
+			c.Close()
 			return nil, err
 		}
 	}
@@ -399,7 +504,7 @@ func (s *Server) Disconnect(id string) {
 	if conn := s.GetConnection(id); conn != nil {
 		s.CancelAll(id)
 		s.connections.Delete(id)
-		conn.Disconnect(nil)
+		conn.Close()
 	}
 }
 
@@ -426,7 +531,7 @@ func (s *Server) broadcast(topic trie.Trie, msg []byte, connID string) error {
 		if conn, ok := s.getConnection(id).(SampleConn); ok && conn != nil {
 			_, e = conn.Write(msg)
 			if e != nil {
-				log.Info().Err(conn.Disconnect(e)).Err(e).Msg("broadcast msg failed with " + id)
+				log.Info().Err(conn.Close()).Err(e).Msg("broadcast msg failed with " + id)
 				e = nil
 			}
 		}
@@ -471,10 +576,10 @@ func dialConn(s *Server, url string, typ uint) *specialConn {
 type SampleConn interface {
 	ID() string
 	io.Writer
+	io.Closer
 	Server() *Server
 	// 0: client  1: lateral 2: superior
 	Type() uint
-	Disconnect(error) error
 	Alive() bool
 }
 
@@ -491,10 +596,6 @@ type specialConn struct {
 // 0: client  1: lateral  2: superior
 func (c *specialConn) Type() uint {
 	return c.typ
-}
-
-func (c *specialConn) Disconnect(err error) error {
-	return c.Close()
 }
 
 func (c *specialConn) Server() *Server {

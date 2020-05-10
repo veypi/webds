@@ -109,7 +109,7 @@ func runPub(c *cli.Context) error {
 			if !c.Bool("hide") {
 				fmt.Printf("%s %s < %s\n", time.Now().Format("2006-01-02 15:04:05"), arg[0], msg)
 			}
-			log.HandlerErrs(conn.Pub(arg[0], msg))
+			conn.Pub(arg[0], msg)
 		}
 		log.HandlerErrs(conn.Close())
 	})
@@ -126,7 +126,7 @@ var list = cli.Command{
 func runList(c *cli.Context) error {
 	conn := newConn(c)
 	conn.OnConnect(func() {
-		log.HandlerErrs(conn.Pub(message.TopicGetAllTopics.String(), ""))
+		conn.Echo(message.TopicGetAllTopics.String(), "")
 	})
 	conn.Subscribe(message.TopicGetAllTopics.String(), func(data string) {
 		fmt.Print(data)

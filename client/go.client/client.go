@@ -36,21 +36,21 @@ const (
 
 type (
 	// DisconnectFunc is the callback which is fired when the ws client closed.
-	DisconnectFunc func()
-	ConnectFunc    func()
+	DisconnectFunc = message.FuncBlank
+	ConnectFunc    = message.FuncBlank
 	// ErrorFunc is the callback which fires whenever an error occurs
-	ErrorFunc func(error)
+	ErrorFunc = message.FuncError
 	// Config websocket client config
 
 	Connection interface {
 		ID() string
-		OnDisconnect(DisconnectFunc)
-		OnConnect(ConnectFunc)
-		OnError(ErrorFunc)
-		Subscribe(string, message.Func)
-		Publisher(string) func(interface{}) error
-		Pub(string, interface{}) error
-		Echo(string, interface{}) error
+		OnDisconnect(DisconnectFunc) message.Subscriber
+		OnConnect(ConnectFunc) message.Subscriber
+		OnError(ErrorFunc) message.Subscriber
+		Subscribe(string, message.Func) message.Subscriber
+		Publisher(string) func(interface{})
+		Pub(string, interface{})
+		Echo(string, interface{})
 		Wait() error
 		Close() error
 		Alive() bool
@@ -118,10 +118,10 @@ func New(conf *Config) Connection {
 	c := &connection{
 		ctx:                   context.Background(),
 		messageType:           websocket.MessageBinary,
-		onDisconnectListeners: make([]DisconnectFunc, 0),
-		onConnectListeners:    make([]ConnectFunc, 0),
-		onErrorListeners:      make([]ErrorFunc, 0),
-		onTopicListeners:      make(map[string][]message.Func, 0),
+		onDisconnectListeners: message.NewSubscriberList(),
+		onConnectListeners:    message.NewSubscriberList(),
+		onErrorListeners:      message.NewSubscriberList(),
+		onTopicListeners:      make(map[string]message.SubscriberList, 0),
 	}
 	conf.Validate()
 	c.init(conf)
@@ -141,10 +141,10 @@ type connection struct {
 	started      utils.SafeBool
 	auth         utils.FastLocker
 
-	onDisconnectListeners []DisconnectFunc
-	onConnectListeners    []ConnectFunc
-	onErrorListeners      []ErrorFunc
-	onTopicListeners      map[string][]message.Func
+	onDisconnectListeners message.SubscriberList
+	onConnectListeners    message.SubscriberList
+	onErrorListeners      message.SubscriberList
+	onTopicListeners      map[string]message.SubscriberList
 }
 
 func (c *connection) init(conf *Config) {
@@ -237,7 +237,7 @@ func (c *connection) messageReceive(data []byte) {
 			log.Warn().Err(message.InvalidMessage).Msg(string(data))
 			return
 		}
-		customMessage, msgType, err := c.messageSerializer.Deserialize(data)
+		customMessage, err := c.messageSerializer.Deserialize(data)
 		if err != nil {
 			log.Warn().Err(err).Msg(string(data))
 			return
@@ -262,50 +262,13 @@ func (c *connection) messageReceive(data []byte) {
 			}
 		}
 		listeners, ok := c.onTopicListeners[evt.String()]
-		if !ok || len(listeners) == 0 {
+		if !ok || listeners.Len() == 0 {
 			log.Warn().Msg("received data but no func handle it")
 			return
 		}
-		for _, item := range listeners {
-			doIt := false
-			switch cb := item.(type) {
-			case message.FuncBlank:
-				cb()
-			case message.FuncInt:
-				if msgType == message.MsgTypeInt {
-					cb(customMessage.(int))
-					doIt = true
-				}
-			case message.FuncString:
-				if msgType == message.MsgTypeString {
-					cb(customMessage.(string))
-					doIt = true
-				}
-			case message.FuncBytes:
-				if msgType == message.MsgTypeBytes || msgType == message.MsgTypeJSON {
-					cb(customMessage.([]byte))
-					doIt = true
-				}
-			case message.FuncBool:
-				if msgType == message.MsgTypeBool {
-					cb(customMessage.(bool))
-					doIt = true
-				}
-			case message.FuncDefault:
-				cb(customMessage)
-				doIt = true
-			default:
-				log.Warn().Str("id", c.id).Str("topic", evt.String()).Msg(" register a invalid callback func")
-				return
-			}
-			if err != nil {
-				log.Warn().Interface("customMessage", customMessage).Str("topic", evt.String()).Msg(err.Error())
-				return
-			}
-			if !doIt {
-				log.Warn().Str("id", c.id).Str("topic", evt.String()).Msg("receive a customMessage but not find appropriate func to handle it")
-			}
-		}
+		listeners.Range(func(s message.Subscriber) {
+			s.Do(customMessage)
+		})
 	} else {
 		log.Warn().Err(message.InvalidMessage).Msg(string(data))
 	}
@@ -315,69 +278,75 @@ func (c *connection) ID() string {
 	return c.id
 }
 
-func (c *connection) OnDisconnect(cb DisconnectFunc) {
+func (c *connection) OnDisconnect(cb DisconnectFunc) message.Subscriber {
 	if c.disconnected.IfTrue() {
 		// 如果已经断开连接则立即触发
 		cb()
-		return
+		return nil
 	}
-	c.onDisconnectListeners = append(c.onDisconnectListeners, cb)
+	return c.onDisconnectListeners.Add(cb)
 }
 
-func (c *connection) OnConnect(cb ConnectFunc) {
+func (c *connection) OnConnect(cb ConnectFunc) message.Subscriber {
 	if c.started.IfTrue() {
 		cb()
-		return
+		return nil
 	}
-	c.onConnectListeners = append(c.onConnectListeners, cb)
+	return c.onConnectListeners.Add(cb)
 }
 
-func (c *connection) OnError(cb ErrorFunc) {
-	c.onErrorListeners = append(c.onErrorListeners, cb)
+func (c *connection) OnError(cb ErrorFunc) message.Subscriber {
+	return c.onErrorListeners.Add(cb)
 }
 
 func (c *connection) FireOnError(err error) {
-	for _, cb := range c.onErrorListeners {
-		cb(err)
-	}
+	c.onErrorListeners.Range(func(s message.Subscriber) {
+		s.Do(err)
+	})
 }
 
 func (c *connection) fireDisconnect() {
-	for _, fc := range c.onDisconnectListeners {
-		fc()
-	}
+	c.onDisconnectListeners.Range(func(s message.Subscriber) {
+		s.Do(nil)
+	})
 }
 
 func (c *connection) fireConnect() {
 	for v := range c.onTopicListeners {
 		c.subscribe(message.NewTopic(v))
 	}
-	for _, fc := range c.onConnectListeners {
-		fc()
-	}
+	c.onConnectListeners.Range(func(s message.Subscriber) {
+		s.Do(nil)
+	})
 }
 
-func (c *connection) Publisher(topic string) func(interface{}) error {
+func (c *connection) Publisher(topic string) func(interface{}) {
 	t := message.NewTopic(topic)
-	return func(data interface{}) error {
-		if !message.IsPublicTopic(t) {
-			return message.ErrNotAllowedTopic
+	return func(data interface{}) {
+		if message.IsPublicTopic(t) {
+			log.HandlerErrs(c.pub(t, data))
+			return
 		}
-		return c.pub(t, data)
+		log.HandlerErrs(message.ErrNotAllowedTopic)
 	}
 }
 
-func (c *connection) Pub(topic string, data interface{}) error {
+func (c *connection) Pub(topic string, data interface{}) {
 	t := message.NewTopic(topic)
-	return c.pub(t, data)
+	if message.IsPublicTopic(t) {
+		log.HandlerErrs(c.pub(t, data))
+		return
+	}
+	log.HandlerErrs(message.ErrNotAllowedTopic)
 }
 
-func (c *connection) Echo(topic string, data interface{}) error {
+func (c *connection) Echo(topic string, data interface{}) {
 	t := message.NewTopic(topic)
-	if !message.IsInnerTopic(t) {
-		return message.ErrNotAllowedTopic
+	if message.IsPublicTopic(t) {
+		log.HandlerErrs(message.ErrNotAllowedTopic)
+		return
 	}
-	return c.pub(t, data)
+	log.HandlerErrs(c.pub(t, data))
 }
 
 func (c *connection) pub(topic message.Topic, data interface{}) error {
@@ -389,13 +358,13 @@ func (c *connection) pub(topic message.Topic, data interface{}) error {
 	return err
 }
 
-func (c *connection) Subscribe(topic string, cb message.Func) {
+func (c *connection) Subscribe(topic string, cb message.Func) message.Subscriber {
 	t := message.NewTopic(topic)
 	if c.onTopicListeners[t.String()] == nil {
-		c.onTopicListeners[t.String()] = make([]message.Func, 0)
+		c.onTopicListeners[t.String()] = message.NewSubscriberList()
 		c.subscribe(t)
 	}
-	c.onTopicListeners[t.String()] = append(c.onTopicListeners[t.String()], cb)
+	return c.onTopicListeners[t.String()].Add(cb)
 }
 
 func (c *connection) subscribe(topic message.Topic) {
