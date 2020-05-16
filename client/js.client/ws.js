@@ -112,9 +112,9 @@ class Topic {
 const PublicTopic = ''
 const SysTopic = 'sys'
 const InnerTopic = 'inner'
-const TopicSubscribe = new Topic('/sys/subscribe')
-const TopicCancel = new Topic('/sys/cancel')
-const TopicCancelAll = new Topic('/sys/cancel_all')
+const TopicSubscribe = new Topic('/sys/topic/subscribe')
+const TopicCancel = new Topic('/sys/topic/cancel')
+const TopicCancelAll = new Topic('/sys/topic/cancel_all')
 const TopicSysLog = new Topic('/sys/log')
 const TopicAuth = new Topic('/sys/auth')
 

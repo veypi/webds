@@ -9,10 +9,10 @@ import (
 )
 
 type testHandler struct {
-	upgrade *Server
+	upgrade *webds
 }
 
-func (t *testHandler) init(c Config) {
+func (t *testHandler) init(c *Config) {
 	t.upgrade = New(c)
 }
 
@@ -42,21 +42,23 @@ func TestNew(t *testing.T) {
 	}
 	newC := func(c Config) {
 		h := testHandler{}
-		h.init(c)
 		time.Sleep(time.Millisecond * time.Duration(seed.Int31n(1000)))
-		http.ListenAndServe(":"+c.ID, &h)
+		h.init(&c)
+		log.HandlerErrs(http.ListenAndServe(":"+c.ID, &h))
 	}
 	c.ID = "8081"
 	c.LateralMaster = LateralMaster[:2]
 	go newC(c)
 	c.ID = "8082"
-	c.LateralMaster = LateralMaster[:2]
+	c.LateralMaster = LateralMaster[:1]
 	go newC(c)
 	c.ID = "8083"
-	c.LateralMaster = LateralMaster[2:]
+	c.SuperiorMaster = LateralMaster[3:]
 	go newC(c)
-	c.LateralMaster = LateralMaster[1:]
+	//c.LateralMaster = LateralMaster[1:]
+	c.LateralMaster = nil
+	c.SuperiorMaster = nil
 	c.ID = "8084"
-	time.Sleep(time.Second * 3)
+	time.Sleep(time.Second * time.Duration(seed.Int31n(5)))
 	newC(c)
 }

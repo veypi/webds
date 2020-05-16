@@ -27,41 +27,44 @@ type (
 
 var json = jsoniter.ConfigFastest
 
-const (
-	PublicTopic = ""
+var (
+	PublicTopic = NewTopic("")
 	// 用户保留主题 不会进行广播
-	InnerTopic = "inner"
+	InnerTopic = NewTopic("inner")
 	// 系统保留主题 不会触发任何注册的回调函数
-	SysTopic = "sys"
+	SysTopic = NewTopic("sys")
 )
 
 var (
+	TopicBase = SysTopic.Child("base")
 	// 日志
-	TopicSysLog = NewTopic("/sys/log")
+	TopicSysLog = TopicBase.Child("log")
 	// 连接权限验证
-	TopicAuth = NewTopic("/sys/auth")
+	TopicAuth = TopicBase.Child("auth")
+)
+
+var (
+	TopicTopic = SysTopic.Child("topic")
 	// 订阅指令
-	TopicSubscribe = NewTopic("/sys/subscribe")
+	TopicSubscribe = TopicTopic.Child("subscribe")
 	// 取消订阅指令
-	TopicCancel = NewTopic("/sys/cancel")
+	TopicCancel = TopicTopic.Child("cancel")
 	// 取消所有订阅指令
-	TopicCancelAll = NewTopic("/sys/cancel_all")
-	// 敏感操作 仅来自127.0.0.1的节点通过判定
-	TopicSubscribeAll = NewTopic("/sys/admin/subscribe_all")
-	TopicGetAllTopics = NewTopic("/sys/admin/get_all_topics")
-	TopicGetAllNodes  = NewTopic("/sys/admin/get_all_nodes")
-	TopicStopNode     = NewTopic("/sys/admin/stop_node")
+	TopicCancelAll = TopicTopic.Child("cancel_all")
+	// 敏感操作 需要通过判定
+	TopicSubscribeAll = TopicTopic.Child("subscribe_all/admin")
+	TopicGetAllTopics = TopicTopic.Child("get_all_topics/admin")
+	TopicGetAllNodes  = TopicTopic.Child("get_all_nodes/admin")
+	TopicStopNode     = TopicTopic.Child("stop_node/admin")
+)
 
-	// 共享集群信息
-	TopicClusterIps = NewTopic("/sys/cluster/ips")
-	// 声明自己是个同级节点 同时声明自己的id
-	TopicLateral         = NewTopic("/sys/cluster/lateral")
-	TopicLateralRedirect = NewTopic("/sys/cluster/lateral/redirect")
-
-	// 声明自己是个子级节点
-	TopicSuperior = NewTopic("/sys/cluster/Superior")
-	// 同步 父级可连接地址
-	TopicSuperiorIps = NewTopic("/sys/cluster/Superior/ips")
+var (
+	TopicCluster = SysTopic.Child("cluster")
+	// 三次同步过程建立节点连接
+	TopicClusterLateral  = TopicCluster.Child("lateral")
+	TopicClusterSuperior = TopicCluster.Child("superior")
+	TopicClusterInfo     = TopicCluster.Child("info")
+	TopicClusterRedirect = TopicCluster.Child("redirect")
 )
 
 var (
@@ -69,27 +72,16 @@ var (
 	ErrUnformedMsg     = errors.New("unformed Msg")
 )
 
-func TypeofTopic(t Topic) string {
-	switch t.FirstFragment() {
-	case SysTopic:
-		return SysTopic
-	case InnerTopic:
-		return InnerTopic
-	default:
-		return PublicTopic
-	}
-}
-
 func IsPublicTopic(t Topic) bool {
-	return TypeofTopic(t) == PublicTopic
+	return !IsInnerTopic(t) && !IsSysTopic(t)
 }
 
 func IsInnerTopic(t Topic) bool {
-	return TypeofTopic(t) == InnerTopic
+	return t.IsChildOf(InnerTopic)
 }
 
 func IsSysTopic(t Topic) bool {
-	return TypeofTopic(t) == SysTopic
+	return t.IsChildOf(SysTopic)
 }
 
 func NewTopic(t string) Topic {
@@ -110,6 +102,8 @@ type Topic interface {
 	FirstFragment() string
 	Fragment(int) string
 	Since(int) string
+	Child(string) Topic
+	IsChildOf(p Topic) bool
 	Len() int
 }
 
@@ -166,6 +160,23 @@ func (t topic) IsChildOf(p Topic) bool {
 	return bytes.HasPrefix(t, p.Bytes())
 }
 
+func (t topic) Child(s string) Topic {
+	if s == "" || s == "/" {
+		panic("invalid topic")
+	}
+	if t.String()[t.Len()-1] == '/' {
+		if s[0] == '/' {
+			s = s[1:]
+		}
+		return NewTopic(t.String() + s)
+	} else {
+		if s[0] != '/' {
+			s = "/" + s
+		}
+		return NewTopic(t.String() + s)
+	}
+}
+
 type (
 	MsgType = byte
 )
@@ -214,8 +225,13 @@ type Serializer struct {
 	buf sync.Pool
 }
 
+var DefaultMsgPrefix = []byte("ws")
+
 // 格式: prefix(n)type(1)random_tag(4)source_idx(4)target_topic;msg
 func NewSerializer(messagePrefix []byte) *Serializer {
+	if messagePrefix == nil {
+		messagePrefix = DefaultMsgPrefix
+	}
 	typeIdx := len(messagePrefix)
 	randomIdx := typeIdx + 1
 	sourceIdx := randomIdx + 4
@@ -242,9 +258,8 @@ var (
 	boolFalse = []byte("0")
 )
 
-func (ms *Serializer) ReturnBackBytes(p []byte) {
-
-	ms.buf.Put(p[:10240])
+func (ms *Serializer) Prefix() []byte {
+	return ms.prefix
 }
 
 // websocketMessageSerialize serializes a custom websocket message from websocketServer to be delivered to the client

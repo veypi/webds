@@ -28,11 +28,14 @@ var Node = cli.Command{
 }
 
 func runNodeList(c *cli.Context) error {
-	conn := newConn(c)
+	conn, err := newConn(c)
+	if err != nil {
+		return err
+	}
 	conn.OnConnect(func() {
-		conn.Echo(message.TopicGetAllNodes.String(), "")
+		conn.Echo(message.TopicGetAllNodes, "")
 	})
-	conn.Subscribe(message.TopicGetAllNodes.String(), func(data interface{}) {
+	conn.Subscribe(message.TopicGetAllNodes, func(data interface{}) {
 		fmt.Print(data)
 		log.HandlerErrs(conn.Close())
 	})
@@ -44,10 +47,13 @@ func runStopNode(c *cli.Context) error {
 		log.Warn().Msg("missing node_id")
 		return nil
 	}
-	conn := newConn(c)
+	conn, err := newConn(c)
+	if err != nil {
+		return err
+	}
 	conn.OnConnect(func() {
 		for _, v := range c.Args() {
-			conn.Echo(message.TopicStopNode.String(), v)
+			conn.Echo(message.TopicStopNode, v)
 		}
 		log.HandlerErrs(conn.Close())
 	})

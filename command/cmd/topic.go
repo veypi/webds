@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/lightjiang/utils/log"
 	client "github.com/lightjiang/webds/client/go.client"
+	"github.com/lightjiang/webds/core"
 	"github.com/lightjiang/webds/message"
 	"github.com/urfave/cli"
 	"strconv"
@@ -36,20 +37,45 @@ var sub = cli.Command{
 			Name:  "hide",
 			Usage: "hide the msg output",
 		},
+		cli.Int64Flag{
+			Name:   "max",
+			Usage:  "max limited to receive msg",
+			Hidden: false,
+			Value:  0,
+		},
 	},
 }
 
 func runSub(c *cli.Context) error {
-	conn := newConn(c)
+	conn, err := newConn(c)
+	if err != nil {
+		return err
+	}
 	fc := func(t string) {
-		conn.Subscribe(t, func(data interface{}) {
-			if !c.Bool("hide") {
-				fmt.Printf("%s %s > %#v \n", time.Now().Format("2006-01-02 15:04:05"), t, data)
+		step := make([]int64, 0, 1000000)
+		hide := c.Bool("hide")
+		max := c.Int("max")
+		log.Info().Msg("start subscribe " + t)
+		conn.Subscribe(message.NewTopic(t), func(data interface{}) {
+			step = append(step, time.Now().UnixNano())
+			if !hide {
+				fmt.Printf("%s %s  %d > %#v \n", time.Now().Format("2006-01-02 15:04:05"), t, len(step), data)
+			}
+			if len(step) == max {
+				conn.Close()
+				return
+			}
+		})
+		conn.OnDisconnect(func() {
+			l := len(step)
+			if l > 0 {
+				start := time.Unix(0, step[0])
+				end := time.Unix(0, step[l-1])
+				log.Info().Msgf("%s: %s -> %s: receive %d msg for %d ms", t, start, end, len(step), end.Sub(start).Milliseconds())
 			}
 		})
 	}
 	for _, i := range c.Args() {
-		log.Debug().Msg("subscribe " + i)
 		fc(i)
 	}
 	return conn.Wait()
@@ -89,7 +115,10 @@ func runPub(c *cli.Context) error {
 		log.Warn().Msg("please add topic and msg")
 		return nil
 	}
-	conn := newConn(c)
+	conn, err := newConn(c)
+	if err != nil {
+		return err
+	}
 	conn.OnConnect(func() {
 		var msg interface{}
 		msg = arg[1]
@@ -102,6 +131,7 @@ func runPub(c *cli.Context) error {
 				return
 			}
 		}
+		now := time.Now()
 		for i := 0; i < c.Int("times"); i++ {
 			if i != 0 {
 				time.Sleep(c.Duration("delta"))
@@ -109,7 +139,10 @@ func runPub(c *cli.Context) error {
 			if !c.Bool("hide") {
 				fmt.Printf("%s %s < %s\n", time.Now().Format("2006-01-02 15:04:05"), arg[0], msg)
 			}
-			conn.Pub(arg[0], msg)
+			conn.Publisher(arg[0])(msg)
+		}
+		if c.Int("times") > 10 {
+			log.Info().Msgf("send %d msg for %s", c.Int("times"), time.Now().Sub(now).String())
 		}
 		log.HandlerErrs(conn.Close())
 	})
@@ -124,25 +157,21 @@ var list = cli.Command{
 }
 
 func runList(c *cli.Context) error {
-	conn := newConn(c)
+	conn, err := newConn(c)
+	if err != nil {
+		return err
+	}
 	conn.OnConnect(func() {
-		conn.Echo(message.TopicGetAllTopics.String(), "")
+		conn.Echo(message.TopicGetAllTopics, "")
 	})
-	conn.Subscribe(message.TopicGetAllTopics.String(), func(data string) {
-		fmt.Print(data)
+	conn.Subscribe(message.TopicGetAllTopics, func(data string) {
+		fmt.Println(data)
 		conn.Close()
 	})
 	return conn.Wait()
 }
 
-func newConn(c *cli.Context) client.Connection {
-	return client.New(&client.Config{
-		Host:            c.GlobalString("host"),
-		ID:              c.GlobalString("id"),
-		PingPeriod:      0,
-		MaxMessageSize:  0,
-		BinaryMessages:  false,
-		ReadBufferSize:  0,
-		WriteBufferSize: 0,
-	})
+func newConn(c *cli.Context) (core.Connection, error) {
+	id := c.GlobalString("id")
+	return client.NewFromUrl(id, c.GlobalString("host"), nil)
 }

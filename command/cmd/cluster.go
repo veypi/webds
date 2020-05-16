@@ -25,11 +25,14 @@ var info = cli.Command{
 	Name:  "info",
 	Usage: "info about cluster",
 	Action: func(c *cli.Context) error {
-		conn := newConn(c)
+		conn, err := newConn(c)
+		if err != nil {
+			return err
+		}
 		conn.OnConnect(func() {
-			conn.Echo(message.TopicClusterIps.String(), "")
+			conn.Echo(message.TopicClusterInfo, "")
 		})
-		conn.Subscribe(message.TopicClusterIps.String(), func(s string) {
+		conn.Subscribe(message.TopicClusterInfo, func(s string) {
 			fmt.Println(s)
 			conn.Close()
 		})

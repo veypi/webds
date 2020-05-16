@@ -59,6 +59,10 @@ Distributed System with websocket
 
 - 消息广播机制 优化和benchmark
 
+- 是否进行目标地址映射，减小协议编码长度
+
+- 变量逃逸分析 是否要大量采用interface来组织代码 评估性能损失
+
 ## update
 
 - v0.2.4 同级节点选举过程完成

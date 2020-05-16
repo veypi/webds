@@ -25,7 +25,7 @@ func main() {
 			Value: "ws://127.0.0.1:8080",
 		},
 		cli.StringFlag{
-			Name:  "id",
+			Name:  "id,i",
 			Usage: "the client id",
 			Value: "admin",
 		},

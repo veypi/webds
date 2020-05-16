@@ -3,25 +3,23 @@ package client
 import (
 	"fmt"
 	"github.com/lightjiang/utils/log"
+	"github.com/lightjiang/webds/message"
 	"testing"
 )
 
-func TestConnection(t *testing.T) {
-	log.Info().Msg("start connection")
-	c := New(&Config{
-		Host:             "127.0.0.1:8080",
-		ID:               "123456",
-		EvtMessagePrefix: nil,
-		BinaryMessages:   false,
-		ReadBufferSize:   0,
-		WriteBufferSize:  0,
-	})
+func TestNew(t *testing.T) {
+	log.Info().Msg("start conn")
+	c, err := NewFromUrl("123456", "127.0.0.1:8080", nil)
+	if err != nil {
+		t.Error(err)
+		return
+	}
 	log.SetLevel(log.TraceLevel)
-	c.Subscribe("test", func(data interface{}) {
+	c.Subscribe(message.NewTopic("test"), func(data interface{}) {
 		fmt.Print(data)
 	})
 	c.OnConnect(func() {
-		c.Pub("test", "123")
+		c.Publisher("test")("123")
 	})
 	c.Wait()
 }
