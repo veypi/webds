@@ -460,7 +460,7 @@ func (c *conn) onSysMsg(t message.Topic, data []byte) error {
 			return c.onTopicMsg(t, data)
 		}
 	case "cluster":
-		if c.webds != nil && c.webds.Cluster() != nil && c.Passive() {
+		if c.webds != nil && c.webds.Cluster() != nil {
 			customMessage, err := c.msgSerializer.Deserialize(data)
 			if err != nil {
 				return err
@@ -495,7 +495,7 @@ func (c *conn) onTopicMsg(t message.Topic, data []byte) error {
 			res := ""
 			c.webds.Range(func(id string, tempC core.Connection) bool {
 				if !tempC.Passive() {
-					res += id + "->" + tempC.TargetID() + "\n"
+					res += "->" + tempC.TargetID() + "\n"
 				} else {
 					res += id + "\n"
 				}

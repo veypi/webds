@@ -7,12 +7,8 @@ type Master interface {
 	Url() string
 	ID() string
 	Level() int
-	SetID(string)
 	Alive() bool
-	NecessaryToConnect() bool
 	Conn() Connection
-	Dial(cfg ConnCfg)
-	Redirect() Master
 }
 
 type Cluster interface {
@@ -23,14 +19,9 @@ type Cluster interface {
 	Receive(c Connection, t message.Topic, data string)
 	Stable() bool
 	Master() Master
-	Search(url string) Master
 	Add(host string, port uint, path string, level int) Master
 	AddUrl(url string, level int) Master
 	Del(url string)
 	Range(func(m Master) bool)
-	SendInfo(to Connection)
-	UpdateFromInfo(from Connection, info string)
-	NextTryToConnect() Master
-	AddSlaveMaster(id string, c Connection)
 	Slave() []Connection
 }
