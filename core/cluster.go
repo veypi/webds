@@ -23,5 +23,6 @@ type Cluster interface {
 	AddUrl(url string, level int) Master
 	Del(url string)
 	Range(func(m Master) bool)
+	RangeConn(func(c Connection) bool)
 	Slave() []Connection
 }

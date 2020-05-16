@@ -155,7 +155,7 @@ func (t *trie) Match(absPath string) Trie {
 	if absPath[0] == '/' {
 		absPath = absPath[1:]
 	}
-	var res *trie
+	var res Trie
 	for i, v := range absPath {
 		if v == '/' {
 			res = t.subMatch(absPath[:i])
@@ -168,7 +168,7 @@ func (t *trie) Match(absPath string) Trie {
 	return t.subMatch(absPath)
 }
 
-func (t *trie) subMatch(f string) *trie {
+func (t *trie) subMatch(f string) Trie {
 	if t.subTrie != nil && t.subTrie[f] != nil {
 		return t.subTrie[f]
 	}

@@ -1,7 +1,6 @@
 package cluster
 
 import (
-	"fmt"
 	"github.com/lightjiang/webds/core"
 	"time"
 )
@@ -33,7 +32,7 @@ type master struct {
 	lastConnected time.Time
 	redirect      *master
 	failedCount   uint
-	// 存储向外的连接
+	// 存储连接
 	conn core.Connection
 }
 
@@ -50,7 +49,12 @@ func (m *master) Conn() core.Connection {
 }
 
 func (m *master) String() string {
-	return fmt.Sprintf("%s;%s;%d", m.Url(), m.id, m.level)
+	if m.level > 0 {
+		return "(s)" + m.Url() + ";" + m.id
+	} else if m.level == 0 {
+		return "(l)" + m.Url() + ";" + m.id
+	}
+	return m.Url() + ";" + m.id
 }
 
 func (m *master) Url() string {
@@ -64,21 +68,23 @@ func (m *master) ID() string {
 }
 
 func (m *master) necessaryToConnect() bool {
-	if m.Url() == "" {
+	if m == nil || m.Url() == "" || m.selfID == m.id || m.Alive() {
 		return false
 	}
-	if m.selfID == m.id {
+	delta := time.Now().Sub(m.lastConnected)
+	if delta < time.Millisecond*100 {
 		return false
 	}
-	if m.redirect != nil && time.Now().Sub(m.lastConnected) < time.Minute {
+	if m.redirect != nil && delta < time.Minute {
 		return false
 	}
-	if m.failedCount > 0 && time.Now().Sub(m.lastConnected) < time.Second<<(m.failedCount-1) {
+	// 指数间隔尝试
+	if m.failedCount > 0 && delta < time.Second<<(m.failedCount-1) {
 		return false
 	}
 	return true
 }
 
 func (m *master) Alive() bool {
-	return m.conn != nil && m.conn.Alive()
+	return m != nil && m.conn != nil && m.conn.Alive()
 }

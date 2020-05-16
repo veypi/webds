@@ -2,7 +2,6 @@ package webds
 
 import (
 	"context"
-	"errors"
 	"github.com/lightjiang/utils/log"
 	"github.com/lightjiang/webds/cluster"
 	"github.com/lightjiang/webds/conn"
@@ -178,20 +177,14 @@ func (s *webds) GetConnectionsByTopic(topic string) []core.Connection {
 	return conns
 }
 
-func (s *webds) Broadcast(topic string, msg []byte, connID string) error {
+func (s *webds) Broadcast(topic string, msg []byte, connID string) {
 	t := s.topics.Match(topic)
-	if t == nil {
-		return errors.New("topic not exist")
-	}
-	return s.broadcast(t, msg, connID)
+	s.broadcast(t, msg, connID)
 }
 
-func (s *webds) broadcast(topic trie.Trie, msg []byte, connID string) error {
-	if topic == nil {
-		return errors.New("topic not exist")
-	}
-	if topic.IDs() == nil {
-		return nil
+func (s *webds) broadcast(topic trie.Trie, msg []byte, connID string) {
+	if topic == nil || topic.IDs() == nil {
+		return
 	}
 	var e error
 	for _, id := range topic.IDs() {
@@ -206,7 +199,7 @@ func (s *webds) broadcast(topic trie.Trie, msg []byte, connID string) error {
 			}
 		}
 	}
-	return nil
+	return
 }
 
 func (s *webds) Topics() trie.Trie {

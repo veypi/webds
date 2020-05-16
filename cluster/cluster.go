@@ -21,6 +21,7 @@ func NewCluster(selfID string, cfg core.ConnCfg) core.Cluster {
 		selfID:     selfID,
 		Locker:     &sync.Mutex{},
 		masterChan: make(chan *master, 10),
+		slaves:     &sync.Map{},
 	}
 }
 
@@ -33,7 +34,7 @@ type cluster struct {
 	masterChan      chan *master
 	superiorMasters []*master
 	lateralMasters  []*master
-	slaves          sync.Map
+	slaves          *sync.Map
 	sync.Locker
 }
 
@@ -43,10 +44,10 @@ func (c *cluster) Receive(conn core.Connection, t message.Topic, data string) {
 	case message.TopicClusterLateral.String():
 		conn.SetLevel(0)
 		if conn.Passive() {
-			if c.master != nil && c.master.Alive() && c.master.Level() == 0 {
+			if c.master.Alive() && c.master.Level() == 0 {
 				conn.Echo(message.TopicClusterRedirect, c.master.Url())
 			} else {
-				c.AddSlaveMaster(data, conn)
+				c.addSlaveMaster(data, conn)
 			}
 			conn.Echo(message.TopicClusterLateral, c.ID())
 		}
@@ -63,6 +64,7 @@ func (c *cluster) Receive(conn core.Connection, t message.Topic, data string) {
 		} else {
 			conn.SetLevel(1)
 		}
+		c.addSlaveMaster(data, conn)
 	case message.TopicClusterInfo.String():
 		c.updateFromInfo(conn, data)
 		if conn.Passive() {
@@ -151,7 +153,7 @@ func (c *cluster) start() {
 			// 仅在此处操作master
 			if m == nil {
 				// 置空
-				if c.master != nil && c.master.Alive() {
+				if c.master.Alive() {
 					c.master.Conn().Close()
 				}
 				c.master = nil
@@ -168,6 +170,16 @@ func (c *cluster) start() {
 					}
 				}
 				c.master = m
+				if m.Level() == 0 {
+					c.slaves.Range(func(key, value interface{}) bool {
+						temp := value.(core.Connection)
+						if temp.Level() == 0 {
+							temp.Echo(message.TopicClusterRedirect, m.Url())
+							temp.Close()
+						}
+						return true
+					})
+				}
 				m.Conn().OnDisconnect(func() {
 					// 重试策略 先查是否有跳转，再重试，再全局寻找
 					c.master = nil
@@ -192,7 +204,6 @@ func (c *cluster) start() {
 				}
 			}
 		case <-ticker.C:
-			log.Warn().Msgf("%s check %v", c.ID(), c.Stable())
 			if !c.Stable() {
 				c.masterChan <- c.nextTryToConnect()
 			}
@@ -201,14 +212,16 @@ func (c *cluster) start() {
 }
 
 // 添加平级从属节点
-func (c *cluster) AddSlaveMaster(id string, conn core.Connection) {
-	if conn.Level() != 0 {
-		return
-	}
+func (c *cluster) addSlaveMaster(id string, conn core.Connection) {
 	c.slaves.Store(id, conn)
 	conn.OnDisconnect(func() {
 		c.slaves.Delete(id)
 	}).SetOnce()
+	for _, temp := range c.lateralMasters {
+		if temp.id == id {
+			temp.conn = conn
+		}
+	}
 }
 
 func (c *cluster) Slave() []core.Connection {
@@ -225,7 +238,7 @@ func (c *cluster) ID() string {
 }
 
 func (c *cluster) Stable() bool {
-	if c.master != nil && c.master.Alive() {
+	if c.master.Alive() {
 		return true
 	}
 	return c.nextTryToConnect() == nil
@@ -270,19 +283,26 @@ func (c *cluster) updateFromInfo(from core.Connection, info string) {
 				log.Warn().Msgf("decode info failed: %s", l)
 				continue
 			}
-			if m := c.search(url); m != nil {
+			m := c.search(url)
+			if m != nil {
 				founded = true
-				if m.id == "" {
-					m.id = id
-				}
 			}
 			if !founded {
 				if from.Level() > 0 && level == 0 {
-					c.addUrl(url, 1).id = id
+					// 从上级节点收到消息更新
+					m = c.addUrl(url, 1)
 				} else if from.Level() == 0 {
-					c.addUrl(url, level).id = id
-				} else if level > 0 {
-					c.addUrl(url, 0).id = id
+					// 从平级节点收到消息更新
+					m = c.addUrl(url, level)
+				} else if from.Level() < 0 && level > 0 {
+					// 从下级节点收到消息更新
+					m = c.addUrl(url, 0)
+				}
+			}
+			if m != nil && m.id == "" && id != "" {
+				m.id = id
+				if tempC, _ := c.slaves.Load(id); tempC != nil {
+					m.conn = tempC.(core.Connection)
 				}
 			}
 		}
@@ -359,6 +379,12 @@ func (c *cluster) Range(f func(m core.Master) bool) {
 			return
 		}
 	}
+}
+
+func (c *cluster) RangeConn(fc func(conn core.Connection) bool) {
+	c.slaves.Range(func(key, value interface{}) bool {
+		return fc(value.(core.Connection))
+	})
 }
 
 func (c *cluster) search(url string) *master {

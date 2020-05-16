@@ -150,7 +150,8 @@ type conn struct {
 
 	started      utils.SafeBool
 	disconnected utils.SafeBool
-	pingStop     chan bool
+	stop         chan bool
+	msgChan      chan []byte
 	selfMU       sync.RWMutex
 
 	onDisconnectListeners message.SubscriberList
@@ -208,6 +209,27 @@ func (c *conn) SetLevel(i int) {
 	c.level = i
 }
 
+func (c *conn) OnDelta(t time.Ticker, cb func()) {
+	if c.started.IfTrue() && !c.disconnected.IfTrue() {
+		log.Warn().Msg("conn not started or has been closed.")
+	}
+	stop := c.stop
+	go func() {
+		defer func() {
+			if e := recover(); e != nil {
+				log.Error().Err(nil).Msgf("conn(%s)'s period func occurred error %v", c.id, e)
+			}
+		}()
+		select {
+		case <-stop:
+			return
+		case <-t.C:
+			cb()
+		}
+	}()
+	return
+}
+
 func (c *conn) OnConnect(cb core.ConnectFunc) message.Subscriber {
 	if c.started.IfTrue() {
 		cb()
@@ -256,6 +278,7 @@ func (c *conn) echo(t message.Topic, data interface{}) {
 	_, err = c.Write(m)
 	if err != nil {
 		log.HandlerErrs(err)
+		c.Close()
 	}
 }
 
@@ -298,11 +321,12 @@ func (c *conn) startPing() {
 	var err error
 	line := c.line
 	clock := time.Tick(time.Minute)
+	stop := c.stop
 	for {
 		// using sleep avoids the ticker error that causes a memory leak
 		select {
 		case <-clock:
-		case <-c.pingStop:
+		case <-stop:
 			return
 		}
 		// try to ping the client, if failed then it disconnects
@@ -320,9 +344,10 @@ func (c *conn) startReader() error {
 	defer func() {
 		log.HandlerErrs(c.Close())
 	}()
-	var err error
-	var buf []byte
 	line := c.line
+	msgChan := c.msgChan
+	var buf []byte
+	var err error
 	for {
 		_, buf, err = line.Read(c.ctx)
 		if err != nil {
@@ -338,22 +363,36 @@ func (c *conn) startReader() error {
 			}
 			return nil
 		}
-		err = c.onMsg(buf)
-		if err != nil {
-			log.Warn().Msg(err.Error() + ":" + string(buf))
-		}
-		err = nil
+		msgChan <- buf
 		buf = nil
+		err = nil
+	}
+}
+
+func (c *conn) msgReader() {
+	defer func() {
+		if e := recover(); e != nil {
+			log.Error().Err(nil).Msgf("ping error: %v", e)
+		}
+		log.HandlerErrs(c.Close())
+	}()
+	msgChan := c.msgChan
+	var err error
+	for data := range msgChan {
+		err = c.onMsg(data)
+		if err != nil {
+			log.Warn().Msg(err.Error())
+		}
 	}
 }
 
 func (c *conn) Wait() error {
 	if c.started.SetTrue() {
-		if c.pingStop == nil {
-			c.pingStop = make(chan bool)
-		}
+		c.stop = make(chan bool)
+		c.msgChan = make(chan []byte, 100)
 		go c.startPing()
 		// start the messages reader
+		go c.msgReader()
 		return c.startReader()
 
 	}
@@ -364,13 +403,16 @@ func (c *conn) Wait() error {
 func (c *conn) Close() error {
 	if c.disconnected.SetTrue() {
 		log.Debug().Msgf("%s (%v) disconnected from %s", c.String(), c.Passive(), utils.CallPath(1))
-		err := c.line.Close(websocket.StatusNormalClosure, "")
 		if c.webds != nil {
 			c.webds.DelConnection(c.id)
 		}
-		if c.pingStop != nil && c.started.IfTrue() {
-			c.pingStop <- true
+		if c.started.IfTrue() {
+			close(c.stop)
+			close(c.msgChan)
+			c.stop = nil
+			c.msgChan = nil
 		}
+		err := c.line.Close(websocket.StatusNormalClosure, "")
 		c.fireDisconnect()
 		releaseConn(c)
 		if err != nil {
@@ -394,10 +436,7 @@ func (c *conn) Type() int {
 }
 
 func (c *conn) Alive() bool {
-	if c == nil {
-		return false
-	}
-	return c.started.IfTrue() && !c.disconnected.IfTrue()
+	return c != nil && c.started.IfTrue() && !c.disconnected.IfTrue()
 }
 
 func (c *conn) fireConnect() {
@@ -419,6 +458,9 @@ func (c *conn) fireDisconnect() {
 }
 
 func (c *conn) FireOnError(err error) {
+	if c.onErrorListeners == nil {
+		return
+	}
 	c.onErrorListeners.Range(func(s message.Subscriber) {
 		s.Do(err)
 	})
@@ -432,6 +474,14 @@ func (c *conn) onMsg(data []byte) error {
 	if message.IsSysTopic(topic) {
 		log.HandlerErrs(c.onSysMsg(topic, data))
 	} else if message.IsPublicTopic(topic) && c.webds != nil {
+		if c.webds != nil && c.webds.Cluster() != nil {
+			c.webds.Cluster().RangeConn(func(nc core.Connection) bool {
+				if nc.ID() != c.id {
+					nc.Write(data)
+				}
+				return true
+			})
+		}
 		c.webds.Broadcast(topic.String(), data, c.id)
 	}
 	listeners, ok := c.onTopicListeners[topic.String()]
@@ -507,7 +557,7 @@ func (c *conn) onTopicMsg(t message.Topic, data []byte) error {
 		// 仅中断连接
 		if tempC := c.webds.GetConnection(customMessage.(string)); tempC != nil {
 			tempC.Echo(message.TopicStopNode, "exit")
-			tempC.Close()
+			log.HandlerErrs(tempC.Close())
 		}
 
 	}

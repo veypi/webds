@@ -47,7 +47,7 @@ func TestNew(t *testing.T) {
 		log.HandlerErrs(http.ListenAndServe(":"+c.ID, &h))
 	}
 	c.ID = "8081"
-	c.LateralMaster = LateralMaster[:2]
+	c.LateralMaster = LateralMaster[:3]
 	go newC(c)
 	c.ID = "8082"
 	c.LateralMaster = LateralMaster[:1]

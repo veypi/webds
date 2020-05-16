@@ -119,7 +119,7 @@ func runPub(c *cli.Context) error {
 	if err != nil {
 		return err
 	}
-	conn.OnConnect(func() {
+	fc := func() {
 		var msg interface{}
 		msg = arg[1]
 		if c.String("type") == "int" {
@@ -140,11 +140,17 @@ func runPub(c *cli.Context) error {
 				fmt.Printf("%s %s < %s\n", time.Now().Format("2006-01-02 15:04:05"), arg[0], msg)
 			}
 			conn.Publisher(arg[0])(msg)
+			if !conn.Alive() {
+				return
+			}
 		}
 		if c.Int("times") > 10 {
 			log.Info().Msgf("send %d msg for %s", c.Int("times"), time.Now().Sub(now).String())
 		}
 		log.HandlerErrs(conn.Close())
+	}
+	conn.OnConnect(func() {
+		fc()
 	})
 	return conn.Wait()
 }

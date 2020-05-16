@@ -7,7 +7,7 @@ type Webds interface {
 	DelConnection(id string)
 	GetConnection(id string) Connection
 	Range(func(id string, c Connection) bool)
-	Broadcast(topic string, msg []byte, id string) error
+	Broadcast(topic string, msg []byte, id string)
 	Subscribe(topic string, id string)
 	CancelSubscribe(topic string, id string)
 	CancelAll(id string)
