@@ -16,6 +16,13 @@ const (
 	Version = "v0.2.5"
 )
 
+type (
+	Webds      = core.Webds
+	Connection = core.Connection
+	Cluster    = core.Cluster
+	Master     = core.Master
+)
+
 type ConnectionFunc func(core.Connection) error
 
 var _ core.Webds = &webds{}

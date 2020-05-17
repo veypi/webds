@@ -64,14 +64,9 @@ type Config struct {
 	//
 	// If empty then defaults to []byte("ws").
 	MsgPrefix []byte
-	// Error is the function that will be fired if any client couldn't upgrade the HTTP conn
-	// to a websocket conn, a handshake error.
-	Error func(w http.ResponseWriter, r *http.Request, status int, reason error)
 	// CheckOrigin a function that is called right before the handshake,
 	// if returns false then that client is not allowed to connect with the websocket server.
 	CheckOrigin func(r *http.Request) bool
-	// HandshakeTimeout specifies the duration for the handshake to complete.
-	HandshakeTimeout time.Duration
 	// WriteTimeout time allowed to write a message to the conn.
 	// 0 means no timeout.
 	// Default value is 0
@@ -107,11 +102,6 @@ type Config struct {
 	// Defaults to false and it should be remain as it is, unless special requirements.
 	EnableCompression bool
 
-	// Subprotocols specifies the server's supported protocols in order of
-	// preference. If this field is set, then the Upgrade method negotiates a
-	// subprotocol by selecting the first match in this list with a protocol
-	// requested by the client.
-	Subprotocols  []string
 	msgSerializer *message.Serializer
 	ctx           context.Context
 	webds         core.Webds
@@ -186,12 +176,6 @@ func (c *Config) Validate() {
 
 	if c.writeBufferSize <= 0 {
 		c.writeBufferSize = DefaultWebsocketWriterBufferSize
-	}
-
-	if c.Error == nil {
-		c.Error = func(w http.ResponseWriter, r *http.Request, status int, reason error) {
-			//empty
-		}
 	}
 
 	if c.CheckOrigin == nil {
