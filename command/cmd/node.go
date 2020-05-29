@@ -2,9 +2,9 @@ package cmd
 
 import (
 	"fmt"
-	"github.com/lightjiang/utils/log"
-	"github.com/lightjiang/webds/message"
 	"github.com/urfave/cli"
+	"github.com/veypi/utils/log"
+	"github.com/veypi/webds/message"
 	"time"
 )
 

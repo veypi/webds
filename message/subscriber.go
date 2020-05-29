@@ -1,8 +1,8 @@
 package message
 
 import (
-	"github.com/lightjiang/utils"
-	"github.com/lightjiang/utils/log"
+	"github.com/veypi/utils"
+	"github.com/veypi/utils/log"
 )
 
 type Subscriber interface {

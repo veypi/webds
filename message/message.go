@@ -5,7 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"github.com/json-iterator/go"
-	"github.com/lightjiang/utils/log"
+	"github.com/veypi/utils/log"
 	"strconv"
 	"sync"
 	"sync/atomic"

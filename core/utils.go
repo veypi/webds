@@ -1,7 +1,7 @@
 package core
 
 import (
-	"github.com/lightjiang/utils/log"
+	"github.com/veypi/utils/log"
 	"strconv"
 	"strings"
 )

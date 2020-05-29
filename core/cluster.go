@@ -1,6 +1,6 @@
 package core
 
-import "github.com/lightjiang/webds/message"
+import "github.com/veypi/webds/message"
 
 type Master interface {
 	String() string

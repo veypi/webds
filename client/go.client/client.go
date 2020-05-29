@@ -1,9 +1,9 @@
 package client
 
 import (
-	"github.com/lightjiang/webds"
-	"github.com/lightjiang/webds/conn"
-	"github.com/lightjiang/webds/core"
+	"github.com/veypi/webds"
+	"github.com/veypi/webds/conn"
+	"github.com/veypi/webds/core"
 )
 
 var defaultCfg = &webds.Config{

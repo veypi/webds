@@ -2,11 +2,11 @@ package cmd
 
 import (
 	"fmt"
-	"github.com/lightjiang/utils/log"
-	client "github.com/lightjiang/webds/client/go.client"
-	"github.com/lightjiang/webds/core"
-	"github.com/lightjiang/webds/message"
 	"github.com/urfave/cli"
+	"github.com/veypi/utils/log"
+	client "github.com/veypi/webds/client/go.client"
+	"github.com/veypi/webds/core"
+	"github.com/veypi/webds/message"
 	"strconv"
 	"time"
 )

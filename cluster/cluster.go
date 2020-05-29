@@ -2,10 +2,10 @@ package cluster
 
 import (
 	"fmt"
-	"github.com/lightjiang/utils/log"
-	"github.com/lightjiang/webds/conn"
-	"github.com/lightjiang/webds/core"
-	"github.com/lightjiang/webds/message"
+	"github.com/veypi/utils/log"
+	"github.com/veypi/webds/conn"
+	"github.com/veypi/webds/core"
+	"github.com/veypi/webds/message"
 	"math/rand"
 	"strconv"
 	"strings"

@@ -1,10 +1,10 @@
 package main
 
 import (
-	"github.com/lightjiang/utils/log"
-	"github.com/lightjiang/webds"
-	"github.com/lightjiang/webds/command/cmd"
 	"github.com/urfave/cli"
+	"github.com/veypi/utils/log"
+	"github.com/veypi/webds"
+	"github.com/veypi/webds/command/cmd"
 	"os"
 )
 

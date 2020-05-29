@@ -2,9 +2,9 @@ package webds
 
 import (
 	"context"
-	"github.com/lightjiang/webds/core"
-	"github.com/lightjiang/webds/message"
 	"github.com/rs/xid"
+	"github.com/veypi/webds/core"
+	"github.com/veypi/webds/message"
 	"net/http"
 	"time"
 )

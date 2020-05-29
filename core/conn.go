@@ -2,7 +2,7 @@ package core
 
 import (
 	"context"
-	"github.com/lightjiang/webds/message"
+	"github.com/veypi/webds/message"
 	"io"
 	"time"
 )

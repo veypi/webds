@@ -1,8 +1,12 @@
 package core
 
-import "github.com/lightjiang/webds/trie"
+import (
+	"github.com/veypi/webds/trie"
+	"net/http"
+)
 
 type Webds interface {
+	Upgrade(w http.ResponseWriter, r *http.Request) (Connection, error)
 	AddConnection(Connection) bool
 	DelConnection(id string)
 	GetConnection(id string) Connection

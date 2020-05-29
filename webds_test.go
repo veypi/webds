@@ -1,7 +1,7 @@
 package webds
 
 import (
-	"github.com/lightjiang/utils/log"
+	"github.com/veypi/utils/log"
 	"math/rand"
 	"net/http"
 	"testing"

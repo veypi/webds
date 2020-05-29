@@ -2,8 +2,8 @@ package client
 
 import (
 	"fmt"
-	"github.com/lightjiang/utils/log"
-	"github.com/lightjiang/webds/message"
+	"github.com/veypi/utils/log"
+	"github.com/veypi/webds/message"
 	"testing"
 )
 

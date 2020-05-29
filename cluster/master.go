@@ -1,7 +1,7 @@
 package cluster
 
 import (
-	"github.com/lightjiang/webds/core"
+	"github.com/veypi/webds/core"
 	"time"
 )
 

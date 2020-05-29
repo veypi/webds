@@ -2,8 +2,8 @@ package cmd
 
 import (
 	"fmt"
-	"github.com/lightjiang/webds/message"
 	"github.com/urfave/cli"
+	"github.com/veypi/webds/message"
 )
 
 var Cluster = cli.Command{
