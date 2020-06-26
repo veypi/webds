@@ -81,6 +81,7 @@ func NewPassiveConn(id string, w http.ResponseWriter, r *http.Request, cfg core.
 	c.onConnectListeners = message.NewSubscriberList()
 	c.onErrorListeners = message.NewSubscriberList()
 	c.onTopicListeners = make(map[string]message.SubscriberList)
+	c.echo(message.TopicAuth, "pass")
 	return c, nil
 }
 
@@ -122,7 +123,6 @@ func NewActiveConn(id, host string, port uint, path string, cfg core.ConnCfg) (c
 	c.onConnectListeners = message.NewSubscriberList()
 	c.onErrorListeners = message.NewSubscriberList()
 	c.onTopicListeners = make(map[string]message.SubscriberList)
-	c.echo(message.TopicAuth, "pass")
 	return c, nil
 }
 

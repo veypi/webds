@@ -115,8 +115,8 @@ const InnerTopic = 'inner'
 const TopicSubscribe = new Topic('/sys/topic/subscribe')
 const TopicCancel = new Topic('/sys/topic/cancel')
 const TopicCancelAll = new Topic('/sys/topic/cancel_all')
-const TopicSysLog = new Topic('/sys/log')
-const TopicAuth = new Topic('/sys/auth')
+const TopicSysLog = new Topic('/sys/base/log')
+const TopicAuth = new Topic('/sys/base/auth')
 
 //
 class Ws {
