@@ -4,8 +4,6 @@ import (
 	"testing"
 )
 
-var s = NewSerializer([]byte("ws"))
-
 func TestSerializer(t *testing.T) {
 	data := map[int]interface{}{
 		-1: nil,
@@ -18,20 +16,18 @@ func TestSerializer(t *testing.T) {
 	}
 	tp := NewTopic("home")
 	for i, d := range data {
-		res, err := s.Serialize(tp, d)
+		res, err := Encode(tp, d)
 		if err != nil {
 			t.Error(err)
 			return
 		}
-		r, err := s.Deserialize(res)
+		r, err := Decode(res)
 		if err != nil {
 			t.Errorf("%d %s :%v", i, res, err)
 			return
 		}
-		if i == 5 {
-			r = string(r.([]byte))
-		}
-		t.Logf("%d %s : %v (%T) => %v (%T)", i, res, d, d, r, r)
+		t.Logf("%d %s : %v (%T) => %v (%T)", i, res, d, d, string(r.Data), r.Data)
+		r.Release()
 	}
 
 }
@@ -51,12 +47,12 @@ func benchmarkSerializer(b *testing.B, data interface{}) {
 	var err error
 	tp := NewTopic("home")
 	for i := 0; i < b.N; i++ {
-		res, err = s.Serialize(tp, data)
+		res, err = Encode(tp, data)
 		if err != nil {
 			b.Error(err)
 			return
 		}
-		_, err = s.Deserialize(res)
+		_, err = Decode(res)
 		if err != nil {
 			b.Error(err)
 			return
@@ -64,6 +60,29 @@ func benchmarkSerializer(b *testing.B, data interface{}) {
 	}
 }
 
+/*
+goos: linux
+goarch: amd64
+pkg: github.com/veypi/webds/message v0.2.5
+BenchmarkSerializer_Int-16               1000000              1797 ns/op           10285 B/op          3 allocs/op
+BenchmarkSerializer_String-16             506079              2371 ns/op           10293 B/op          3 allocs/op
+BenchmarkSerializer_Bool-16               524312              2301 ns/op           10277 B/op          2 allocs/op
+BenchmarkSerializer_bytes-16              491308              2369 ns/op           10309 B/op          3 allocs/op
+BenchmarkSerializer_Json-16               320527              6259 ns/op           10485 B/op          7 allocs/op
+
+
+goos: linux
+goarch: amd64
+pkg: github.com/veypi/webds/message protobuf
+BenchmarkSerializer_Int-16               1332846               861 ns/op             320 B/op          7 allocs/op
+BenchmarkSerializer_String-16            1381249              1007 ns/op             312 B/op          6 allocs/op
+BenchmarkSerializer_Bool-16              1410748               948 ns/op             304 B/op          6 allocs/op
+BenchmarkSerializer_bytes-16             1467572               870 ns/op             304 B/op          5 allocs/op
+BenchmarkSerializer_Json-16               836677              1506 ns/op             509 B/op          9 allocs/op
+PASS
+ok      github.com/veypi/webds/message  9.916s
+
+*/
 func BenchmarkSerializer_Int(b *testing.B) {
 	benchmarkSerializer(b, 12345)
 }
@@ -93,18 +112,5 @@ func TestTopic(t *testing.T) {
 	}
 	if topic.Since(0) != "/asd/ss/123/2/435" {
 		t.Error(topic.Since(0))
-	}
-}
-
-func TestSerializer_GetMsgTopic(t *testing.T) {
-	tp := NewTopic("home")
-	data, err := s.Serialize(tp, 123)
-	if err != nil {
-		t.Error(err)
-		return
-	}
-	nt := s.GetMsgTopic(data)
-	if nt.String() != tp.String() {
-		t.Errorf("get msg topic error: %s -> %s", tp, nt)
 	}
 }

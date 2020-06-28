@@ -1,0 +1,19 @@
+syntax = "proto3";
+package message;
+
+// 格式: prefix(n)type(1)random_tag(4)source_idx(4)target_topic;msg
+message message {
+  enum typ {
+    Bytes = 0;
+    String = 1;
+    Int = 2;
+    Bool = 3;
+    JSON = 4;
+  }
+  typ type = 1;
+  uint64 tag= 2;
+  string source = 3;
+  string target = 4;
+  bytes  data = 5;
+  int64 unix_time = 6;
+}

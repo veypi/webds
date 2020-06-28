@@ -4,7 +4,6 @@ import (
 	"context"
 	"github.com/rs/xid"
 	"github.com/veypi/webds/core"
-	"github.com/veypi/webds/message"
 	"net/http"
 	"time"
 )
@@ -84,10 +83,6 @@ type Config struct {
 	// MaxMessageSize max message size allowed from conn.
 	// Default value is 1024
 	maxMessageSize int64
-	// BinaryMessages set it to true in order to denotes binary data messages instead of utf-8 text
-	// compatible if you wanna use the Connection's EmitMessage to send a custom binary data to the client, like a native server-client communication.
-	// Default value is false
-	binaryMessages bool
 	// ReadBufferSize is the buffer size for the conn reader.
 	// Default value is 4096
 	readBufferSize int64
@@ -102,13 +97,8 @@ type Config struct {
 	// Defaults to false and it should be remain as it is, unless special requirements.
 	EnableCompression bool
 
-	msgSerializer *message.Serializer
-	ctx           context.Context
-	webds         core.Webds
-}
-
-func (c *Config) MsgSerializer() *message.Serializer {
-	return c.msgSerializer
+	ctx   context.Context
+	webds core.Webds
 }
 
 func (c *Config) Ctx() context.Context {
@@ -131,20 +121,10 @@ func (c *Config) ReadBufferSize() int64 {
 	return c.readBufferSize
 }
 
-func (c *Config) BinaryMessages() bool {
-	return c.binaryMessages
-}
-
 // Validate validates the configuration
 func (c *Config) Validate() {
 	if c.ID == "" {
 		c.ID = xid.New().String()
-	}
-	if len(c.MsgPrefix) == 0 {
-		c.MsgPrefix = message.DefaultMsgPrefix
-	}
-	if c.msgSerializer == nil {
-		c.msgSerializer = message.NewSerializer(c.MsgPrefix)
 	}
 	if c.ctx == nil {
 		c.ctx = context.Background()

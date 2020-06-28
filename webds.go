@@ -38,7 +38,7 @@ type webds struct {
 	cfg                   *Config
 	connections           sync.Map // key = the Connection ID.
 	topics                trie.Trie
-	onConnectionListeners message.SubscriberList
+	onConnectionListeners *message.SubscriberList
 	//connectionPool        sync.Webds // sadly we can't make this because the websocket conn is live until is closed.
 }
 
@@ -86,7 +86,7 @@ func (s *webds) Upgrade(w http.ResponseWriter, r *http.Request) (core.Connection
 		err = ErrID
 	}
 	c.SetTargetID(s.ID())
-	s.onConnectionListeners.Range(func(s message.Subscriber) {
+	s.onConnectionListeners.Range(func(s *message.Subscriber) {
 		s.Do(c)
 	})
 	return c, err
@@ -119,7 +119,7 @@ func (s *webds) Range(fc func(id string, c core.Connection) bool) {
 }
 
 // OnConnection 当有新连接生成时触发
-func (s *webds) OnConnection(cb ConnectionFunc) message.Subscriber {
+func (s *webds) OnConnection(cb ConnectionFunc) *message.Subscriber {
 	return s.onConnectionListeners.Add(func(data interface{}) {
 		log.HandlerErrs(cb(data.(core.Connection)))
 	})
