@@ -23,6 +23,11 @@ type (
 	Master     = core.Master
 )
 
+var (
+	EncodeUrl = core.EncodeUrl
+	DecodeUrl = core.DecodeUrl
+)
+
 type ConnectionFunc func(core.Connection) error
 
 var _ core.Webds = &webds{}

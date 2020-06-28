@@ -23,7 +23,7 @@ func TestSerializer(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		r, _, err := s.Deserialize(res)
+		r, err := s.Deserialize(res)
 		if err != nil {
 			t.Errorf("%d %s :%v", i, res, err)
 			return
@@ -31,7 +31,6 @@ func TestSerializer(t *testing.T) {
 		if i == 5 {
 			r = string(r.([]byte))
 		}
-		s.ReturnBackBytes(res)
 		t.Logf("%d %s : %v (%T) => %v (%T)", i, res, d, d, r, r)
 	}
 
@@ -57,12 +56,11 @@ func benchmarkSerializer(b *testing.B, data interface{}) {
 			b.Error(err)
 			return
 		}
-		_, _, err = s.Deserialize(res)
+		_, err = s.Deserialize(res)
 		if err != nil {
 			b.Error(err)
 			return
 		}
-		s.ReturnBackBytes(res)
 	}
 }
 

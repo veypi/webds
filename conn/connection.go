@@ -402,7 +402,7 @@ func (c *conn) Wait() error {
 
 func (c *conn) Close() error {
 	if c.disconnected.SetTrue() {
-		log.Debug().Msgf("%s (%v) disconnected from %s", c.String(), c.Passive(), utils.CallPath(1))
+		log.Debug().Msgf("%s (%v) closed, called from %s", c.String(), c.Passive(), utils.CallPath(1))
 		if c.webds != nil {
 			c.webds.DelConnection(c.id)
 		}

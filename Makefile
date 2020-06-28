@@ -1,6 +1,6 @@
 # 查看版本
 version:
-	@grep -p 'Version = ' webds.go|cut -f2 -d'"'
+	@awk -F '"' '/Version/ {print $$2;}' webds.go
 
 # 提交版本
 tag:
