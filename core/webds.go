@@ -1,12 +1,16 @@
 package core
 
 import (
+	"github.com/veypi/webds/message"
 	"github.com/veypi/webds/trie"
 	"net/http"
 )
 
+type ConnectionFunc func(Connection) error
+
 type Webds interface {
 	Upgrade(w http.ResponseWriter, r *http.Request) (Connection, error)
+	OnConnection(cb ConnectionFunc) *message.Subscriber
 	AddConnection(Connection) bool
 	DelConnection(id string)
 	GetConnection(id string) Connection

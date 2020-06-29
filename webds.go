@@ -28,8 +28,6 @@ var (
 	DecodeUrl = core.DecodeUrl
 )
 
-type ConnectionFunc func(core.Connection) error
-
 var _ core.Webds = &webds{}
 
 type webds struct {
@@ -119,7 +117,7 @@ func (s *webds) Range(fc func(id string, c core.Connection) bool) {
 }
 
 // OnConnection 当有新连接生成时触发
-func (s *webds) OnConnection(cb ConnectionFunc) *message.Subscriber {
+func (s *webds) OnConnection(cb core.ConnectionFunc) *message.Subscriber {
 	return s.onConnectionListeners.Add(func(data interface{}) {
 		log.HandlerErrs(cb(data.(core.Connection)))
 	})

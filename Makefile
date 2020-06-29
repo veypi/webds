@@ -10,3 +10,5 @@ tag:
 dropTag:
 	@awk -F '"' '/Version/ {print $$2;system("git tag -d "$$2);system("git push origin :refs/tags/"$$2)}' webds.go
 
+protoc:
+	@protoc --proto_path=./message --go_out=./message ./message/msg.proto

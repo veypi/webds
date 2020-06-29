@@ -1,7 +1,6 @@
 syntax = "proto3";
 package message;
 
-// 格式: prefix(n)type(1)random_tag(4)source_idx(4)target_topic;msg
 message message {
   enum typ {
     Bytes = 0;
