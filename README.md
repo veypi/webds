@@ -57,6 +57,7 @@ Distributed System with websocket
 
 ## update
 
+- v0.2.6 采用protobuf 重写通信协议
 - v0.2.5 重新组织代码，将重要对象拆分成interface, 优化代码逻辑，完善节点选举
 - v0.2.4 同级节点选举过程完成
 - v0.2.3 修改了消息协议 完善分布式设计思路
