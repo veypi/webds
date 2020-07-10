@@ -133,7 +133,8 @@ class Ws {
     } else {
       this.conn = new WebSocket(endpoint)
     }
-    this.conn.onopen = function(evt) {
+    this.conn.binaryType = 'blob'
+    this.conn.onopen = function (evt) {
       _this.isReady = true
       for (let i in _this.messageListeners) {
         _this._subscribe(i)
@@ -141,15 +142,20 @@ class Ws {
       // _this.fireConnect()
       return null
     }
-    this.conn.onclose = function(evt) {
+    this.conn.onclose = function (evt) {
       _this.fireDisconnect()
       return null
     }
-    this.conn.onmessage = function(evt) {
-      evt.data.arrayBuffer().then((buf) => {
-        buf = new Uint8Array(buf)
-        _this.messageReceivedFromConn(Message.decode(buf))
-      })
+    this.conn.onmessage = function (evt) {
+      if (evt.data instanceof Blob) {
+        let reader = new FileReader()
+        reader.onload = () => {
+          _this.messageReceivedFromConn(Message.decode(new Uint8Array(reader.result)))
+        }
+        reader.readAsArrayBuffer(evt.data)
+      } else {
+        _this.messageReceivedFromConn(Message.decode(evt.data))
+      }
     }
   }
 
