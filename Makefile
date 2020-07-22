@@ -12,3 +12,12 @@ dropTag:
 
 protoc:
 	@protoc --proto_path=./message --go_out=./message ./message/msg.proto
+
+.PHONY:build
+
+build:
+	cd ./command/ && go build -o ../build/webds
+
+install: build
+	./build/webds install
+

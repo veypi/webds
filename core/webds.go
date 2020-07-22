@@ -19,7 +19,7 @@ type Webds interface {
 	Subscribe(topic string, id string)
 	CancelSubscribe(topic string, id string)
 	CancelAll(id string)
-	Topics() trie.Trie
+	Topics() *trie.Trie
 	Cluster() Cluster
 	ID() string
 }

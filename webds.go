@@ -35,7 +35,7 @@ type webds struct {
 	cluster               core.Cluster
 	cfg                   *Config
 	connections           sync.Map // key = the Connection ID.
-	topics                trie.Trie
+	topics                *trie.Trie
 	onConnectionListeners *message.SubscriberList
 	//connectionPool        sync.Webds // sadly we can't make this because the websocket conn is live until is closed.
 }
@@ -188,11 +188,17 @@ func (s *webds) GetConnectionsByTopic(topic string) []core.Connection {
 }
 
 func (s *webds) Broadcast(topic string, msg []byte, connID string) {
-	t := s.topics.Match(topic)
-	s.broadcast(t, msg, connID)
+	t := s.topics.LastMatch(topic)
+	for {
+		if t == nil {
+			return
+		}
+		s.broadcast(t, msg, connID)
+		t = t.Parent()
+	}
 }
 
-func (s *webds) broadcast(topic trie.Trie, msg []byte, connID string) {
+func (s *webds) broadcast(topic *trie.Trie, msg []byte, connID string) {
 	if topic == nil || topic.IDs() == nil {
 		return
 	}
@@ -212,6 +218,6 @@ func (s *webds) broadcast(topic trie.Trie, msg []byte, connID string) {
 	return
 }
 
-func (s *webds) Topics() trie.Trie {
+func (s *webds) Topics() *trie.Trie {
 	return s.topics
 }

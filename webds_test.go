@@ -29,7 +29,7 @@ func TestNew(t *testing.T) {
 	log.SetLevel(log.TraceLevel)
 	log.Info().Msg("start webds server")
 	c := Config{}
-	c.EnableCluster = true
+	c.EnableCluster = false
 	c.IDGenerator = func(r *http.Request) string {
 		return r.Header.Get("id")
 	}

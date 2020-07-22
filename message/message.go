@@ -7,6 +7,7 @@ import (
 	"github.com/json-iterator/go"
 	"github.com/veypi/utils/log"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -86,10 +87,7 @@ func IsSysTopic(t Topic) bool {
 }
 
 func NewTopic(t string) Topic {
-	if len(t) > 0 && t[0] == '/' {
-		return topic(t)
-	}
-	return topic("/" + t)
+	return topic("/" + strings.Trim(t, "/"))
 }
 
 type Topic interface {
@@ -217,6 +215,7 @@ var msgCounter uint64
 
 func Encode(t Topic, data interface{}) ([]byte, error) {
 	m := New()
+	m.Source = "/s"
 	m.UnixTime = time.Now().Unix()
 	m.Target = t.String()
 	m.Tag = atomic.AddUint64(&msgCounter, 1)

@@ -474,13 +474,18 @@ func (c *conn) onMsg(m *message.Message) error {
 		}
 		c.webds.Broadcast(topic.String(), buf, c.id)
 	}
-	listeners, ok := c.onTopicListeners[topic.String()]
-	if !ok || listeners.Len() == 0 {
-		return nil
+	ts := topic.String()
+	for t, listeners := range c.onTopicListeners {
+		if listeners.Len() == 0 {
+			continue
+		}
+		if strings.HasPrefix(ts, t) {
+			listeners.Range(func(s *message.Subscriber) {
+				s.Do(m)
+			})
+		}
+
 	}
-	listeners.Range(func(s *message.Subscriber) {
-		s.Do(m)
-	})
 	return nil
 }
 

@@ -1,22 +1,21 @@
-package cmd
+package main
 
 import (
 	"fmt"
-	"github.com/urfave/cli"
+	"github.com/urfave/cli/v2"
 	"github.com/veypi/webds/message"
 )
 
-var Cluster = cli.Command{
+var Cluster = &cli.Command{
 	Name:         "cluster",
-	ShortName:    "",
 	Aliases:      nil,
 	Usage:        "cluster",
 	UsageText:    "",
 	Description:  "some command about cluster",
 	BashComplete: nil,
 	Action:       nil,
-	Subcommands: []cli.Command{
-		info,
+	Subcommands: []*cli.Command{
+		&info,
 	},
 	Flags: nil,
 }
@@ -25,7 +24,7 @@ var info = cli.Command{
 	Name:  "info",
 	Usage: "info about cluster",
 	Action: func(c *cli.Context) error {
-		conn, err := newConn(c)
+		conn, err := newConn()
 		if err != nil {
 			return err
 		}

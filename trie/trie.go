@@ -6,36 +6,28 @@ import (
 	"sync"
 )
 
-type Trie interface {
-	String() string
-	AbsPath() string
-	Match(string) Trie
-	AddSub(string) Trie
-	AttachID(string)
-	DropID(string)
-	DropAllSubID(string)
-	ExistID(string) bool
-	IDs() []string
-}
-
-func New() Trie {
-	return &trie{
+func New() *Trie {
+	return &Trie{
 		ids: make([]string, 0, 10),
 	}
 }
 
-type trie struct {
+type Trie struct {
 	// the word between //
 	sync.RWMutex
 	ids      []string
 	fragment string
 	depth    uint
-	parent   *trie
+	parent   *Trie
 	// TODO:: pprof 显示map读取占据最多时间，每一级都有一次读操作，考虑是否使用slice降低每次读取时间，还是使用缓存，降低读取次数
-	subTrie map[string]*trie
+	subTrie map[string]*Trie
 }
 
-func (t *trie) String() string {
+func (t *Trie) Parent() *Trie {
+	return t.parent
+}
+
+func (t *Trie) String() string {
 	res := t.string()
 	if len(res) == 0 {
 		return ""
@@ -44,7 +36,7 @@ func (t *trie) String() string {
 	return strings.Join(res, "\n")
 }
 
-func (t *trie) string() []string {
+func (t *Trie) string() []string {
 	res := make([]string, 0, 10)
 	if t.ids != nil && len(t.ids) != 0 {
 		res = append(res, t.AbsPath())
@@ -59,14 +51,14 @@ func (t *trie) string() []string {
 	return res
 }
 
-func (t *trie) AbsPath() string {
+func (t *Trie) AbsPath() string {
 	if t.parent != nil {
 		return t.parent.AbsPath() + "/" + t.fragment
 	}
 	return t.fragment
 }
 
-func (t *trie) ExistID(id string) (ok bool) {
+func (t *Trie) ExistID(id string) (ok bool) {
 	if t.ids == nil {
 		return
 	}
@@ -81,7 +73,7 @@ func (t *trie) ExistID(id string) (ok bool) {
 	return
 }
 
-func (t *trie) AttachID(id string) {
+func (t *Trie) AttachID(id string) {
 	if t.ExistID(id) {
 		return
 	}
@@ -93,7 +85,7 @@ func (t *trie) AttachID(id string) {
 	t.Unlock()
 }
 
-func (t *trie) DropID(id string) {
+func (t *Trie) DropID(id string) {
 	if t.ExistID(id) {
 		t.Lock()
 		var index int
@@ -108,18 +100,18 @@ func (t *trie) DropID(id string) {
 	}
 }
 
-func (t *trie) DropAllSubID(id string) {
+func (t *Trie) DropAllSubID(id string) {
 	t.DropID(id)
 	for _, sub := range t.subTrie {
 		sub.DropAllSubID(id)
 	}
 }
 
-func (t *trie) IDs() []string {
+func (t *Trie) IDs() []string {
 	return t.ids
 }
 
-func (t *trie) AddSub(absPath string) Trie {
+func (t *Trie) AddSub(absPath string) *Trie {
 	if t.parent != nil {
 		return t.parent.AddSub(absPath)
 	}
@@ -127,18 +119,21 @@ func (t *trie) AddSub(absPath string) Trie {
 	return t.add(fragments)
 }
 
-func (t *trie) add(fragments []string) Trie {
+func (t *Trie) add(fragments []string) *Trie {
 	if len(fragments) == 0 {
 		return t
 	}
 	f := fragments[0]
+	if f == "" {
+		return t
+	}
 	if t.subTrie == nil {
-		t.subTrie = make(map[string]*trie)
+		t.subTrie = make(map[string]*Trie)
 	}
 	if n := t.subTrie[f]; n != nil {
 		return n.add(fragments[1:])
 	}
-	next := &trie{
+	next := &Trie{
 		ids:      make([]string, 0, 10),
 		fragment: f,
 		depth:    t.depth + 1,
@@ -148,14 +143,38 @@ func (t *trie) add(fragments []string) Trie {
 	return next.add(fragments[1:])
 }
 
-func (t *trie) Match(absPath string) Trie {
-	if absPath == "" {
+func (t *Trie) LastMatch(absPath string) *Trie {
+	if absPath == "" || absPath == "/" {
 		return t
 	}
 	if absPath[0] == '/' {
 		absPath = absPath[1:]
 	}
-	var res Trie
+	var res *Trie
+	for i, v := range absPath {
+		if v == '/' {
+			res = t.subMatch(absPath[:i])
+			if res == nil {
+				return t
+			}
+			return res.LastMatch(absPath[i:])
+		}
+	}
+	res = t.subMatch(absPath)
+	if res == nil {
+		return t
+	}
+	return res
+}
+
+func (t *Trie) Match(absPath string) *Trie {
+	if absPath == "" || absPath == "/" {
+		return t
+	}
+	if absPath[0] == '/' {
+		absPath = absPath[1:]
+	}
+	var res *Trie
 	for i, v := range absPath {
 		if v == '/' {
 			res = t.subMatch(absPath[:i])
@@ -168,7 +187,7 @@ func (t *trie) Match(absPath string) Trie {
 	return t.subMatch(absPath)
 }
 
-func (t *trie) subMatch(f string) Trie {
+func (t *Trie) subMatch(f string) *Trie {
 	if t.subTrie != nil && t.subTrie[f] != nil {
 		return t.subTrie[f]
 	}
