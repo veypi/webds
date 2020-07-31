@@ -11,6 +11,8 @@ type ConnectionFunc func(Connection) error
 type Webds interface {
 	Upgrade(w http.ResponseWriter, r *http.Request) (Connection, error)
 	OnConnection(cb ConnectionFunc) *message.Subscriber
+	OnMsg(t message.Topic, m message.Func) *message.Subscriber
+	FireMsg(m *message.Message)
 	AddConnection(Connection) bool
 	DelConnection(id string)
 	GetConnection(id string) Connection
@@ -22,4 +24,8 @@ type Webds interface {
 	Topics() *trie.Trie
 	Cluster() Cluster
 	ID() string
+	String() string
+	Listen(add string) error
+	AutoListen() error
+	ServeHTTP(w http.ResponseWriter, r *http.Request)
 }

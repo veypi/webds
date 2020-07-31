@@ -6,7 +6,8 @@ type Master interface {
 	String() string
 	Url() string
 	ID() string
-	Level() int
+	// 返回节点级别
+	Level() uint
 	Alive() bool
 	Conn() Connection
 }
@@ -16,13 +17,26 @@ type Cluster interface {
 	// 开始主动请求连接其他节点
 	Start()
 	// 被动接收到协议请求信息
-	Receive(c Connection, t message.Topic, data string)
+	Receive(c Connection, t message.Topic, data interface{})
 	Stable() bool
 	Master() Master
-	Add(host string, port uint, path string, level int) Master
-	AddUrl(url string, level int) Master
+	// 添加cluster节点地址
+	Add(host string, port uint, path string) Master
+	AddUrl(url string) Master
 	Del(url string)
 	Range(func(m Master) bool)
 	RangeConn(func(c Connection) bool)
 	Slave() []Connection
+}
+
+type ClusterCfgs interface {
+	ConnCfg
+	ClusterMasters() []string
+	ClusterLevel() uint
+	ClusterTarget() uint
+	AllowedLowerTarget() bool
+	EnableAutoDetect() bool
+	ClusterPortMin() uint
+	ClusterPortMax() uint
+	ClusterSuffix() string
 }

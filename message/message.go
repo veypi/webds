@@ -56,16 +56,25 @@ var (
 	// 敏感操作 需要通过判定
 	TopicSubscribeAll = TopicTopic.Child("subscribe_all/admin")
 	TopicGetAllTopics = TopicTopic.Child("get_all_topics/admin")
-	TopicGetAllNodes  = TopicTopic.Child("get_all_nodes/admin")
-	TopicStopNode     = TopicTopic.Child("stop_node/admin")
+)
+
+var (
+	TopicNode        = SysTopic.Child("node")
+	TopicGetAllNodes = TopicNode.Child("get_all_nodes/admin")
+	TopicStopNode    = TopicNode.Child("stop_node/admin")
+	TopicNodeStatus  = TopicNode.Child("status/admin")
 )
 
 var (
 	TopicCluster = SysTopic.Child("cluster")
 	// 三次同步过程建立节点连接
-	TopicClusterLateral  = TopicCluster.Child("lateral")
-	TopicClusterSuperior = TopicCluster.Child("superior")
-	TopicClusterInfo     = TopicCluster.Child("info")
+	// 交换id
+	TopicClusterID = TopicCluster.Child("id")
+	// 通知本身级别
+	TopicClusterLevel = TopicCluster.Child("level")
+	// 交换cluster节点信息
+	TopicClusterInfo = TopicCluster.Child("info")
+	// 是否跳转有子节点决定
 	TopicClusterRedirect = TopicCluster.Child("redirect")
 )
 

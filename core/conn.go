@@ -27,8 +27,6 @@ type Connection interface {
 	// 判断是个被动建立的连接还是主动建立的连接
 	Passive() bool
 	TargetID() string
-	Level() int
-	SetLevel(int)
 	TargetUrl() string
 	SetTargetID(string)
 	SetTargetHost(string)

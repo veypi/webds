@@ -2,7 +2,6 @@ package main
 
 import (
 	"github.com/urfave/cli/v2"
-	"github.com/veypi/utils"
 	"github.com/veypi/utils/cmd"
 	"github.com/veypi/utils/log"
 	"github.com/veypi/webds"
@@ -16,52 +15,46 @@ var cfg = &struct {
 	ID       string
 }{
 	ID:       "admin",
-	Host:     "ws://127.0.0.1:8080",
+	Host:     "ws://127.0.0.1:10086",
 	LogLevel: "info",
 }
 
 const appName = "webds"
 
-var cfgPath = utils.PathJoin(cmd.GetLocalCfg(appName), appName+".yml")
+var cfgPath = cmd.GetCfgPath(appName, appName)
 
 func main() {
-	err := cmd.LoadCfg(cfgPath, cfg)
-	if err != nil && !os.IsNotExist(err) {
-		log.Warn().Msg(err.Error())
-	}
-	app := cli.NewApp()
+	cmd.LoadCfg(cfgPath, cfg)
+	app := cmd.NewCli(appName, cfg, cfgPath)
 	app.Version = webds.Version
-	app.Name = appName
 	app.Usage = "webds command tool, which is valid in server's host."
-	app.Flags = []cli.Flag{
+	app.Flags = append(app.Flags,
 		&cli.StringFlag{
 			Name:        "log_level",
-			Usage:       "trace/debug/info/warn/error/fatal/panic, default is info level",
+			Usage:       "trace/debug/info/warn/error/fatal/panic",
 			Value:       cfg.LogLevel,
 			Destination: &cfg.LogLevel,
 		},
 		&cli.StringFlag{
 			Name:        "host",
-			Usage:       "the server address, default is ws://127.0.0.1:8080",
+			Usage:       "the server address",
 			Value:       cfg.Host,
 			Destination: &cfg.Host,
 		},
 		&cli.StringFlag{
 			Name:        "id",
+			Aliases:     []string{"i"},
 			Usage:       "the client id",
 			Value:       cfg.ID,
 			Destination: &cfg.ID,
 		},
-	}
-	app.Commands = []*cli.Command{
+	)
+	app.Commands = append(app.Commands,
 		Topic,
 		Node,
 		Cluster,
-	}
-	err = cmd.NewCli(app, cfg, cfgPath)
-	if err != nil {
-		log.Warn().Msg(err.Error())
-	}
+		Scan,
+	)
 	app.Before = func(c *cli.Context) error {
 		//log.DisableCaller()
 		if l, err := log.ParseLevel(cfg.LogLevel); err != nil {

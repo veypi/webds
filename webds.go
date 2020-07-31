@@ -2,13 +2,17 @@ package webds
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"github.com/veypi/utils/log"
+	"github.com/veypi/webds/cfg"
 	"github.com/veypi/webds/cluster"
 	"github.com/veypi/webds/conn"
 	"github.com/veypi/webds/core"
 	"github.com/veypi/webds/message"
 	"github.com/veypi/webds/trie"
 	"net/http"
+	"strings"
 	"sync"
 )
 
@@ -21,6 +25,7 @@ type (
 	Connection = core.Connection
 	Cluster    = core.Cluster
 	Master     = core.Master
+	Config     = cfg.Config
 )
 
 var (
@@ -33,10 +38,12 @@ var _ core.Webds = &webds{}
 type webds struct {
 	ctx                   context.Context
 	cluster               core.Cluster
-	cfg                   *Config
+	cfg                   *cfg.Config
 	connections           sync.Map // key = the Connection ID.
 	topics                *trie.Trie
+	addr                  string
 	onConnectionListeners *message.SubscriberList
+	onMsgListeners        map[string]*message.SubscriberList
 	//connectionPool        sync.Webds // sadly we can't make this because the websocket conn is live until is closed.
 }
 
@@ -48,25 +55,28 @@ func New(cfg *Config) *webds {
 		connections:           sync.Map{},
 		topics:                trie.New(),
 		onConnectionListeners: message.NewSubscriberList(),
+		onMsgListeners:        make(map[string]*message.SubscriberList),
 	}
-	w.cfg.webds = w
+	w.cfg.SetWebds(w)
 	if !cfg.EnableCluster {
 		return w
 	}
 	w.cluster = cluster.NewCluster(cfg.ID, cfg)
-	for _, url := range cfg.LateralMaster {
-		w.cluster.AddUrl(url, 0)
+	for _, url := range cfg.ClusterMasters {
+		w.cluster.AddUrl(url)
 	}
-	for _, url := range cfg.SuperiorMaster {
-		w.cluster.AddUrl(url, 1)
-	}
-	w.cluster.Start()
+	go w.cluster.Start()
 	return w
 }
 
 func (s *webds) ID() string {
 	return s.cfg.ID
 }
+
+func (s *webds) String() string {
+	return fmt.Sprintf("%s(%s)", s.cfg.ID, s.addr)
+}
+
 func (s *webds) Cluster() core.Cluster {
 	return s.cluster
 }
@@ -121,6 +131,31 @@ func (s *webds) OnConnection(cb core.ConnectionFunc) *message.Subscriber {
 	return s.onConnectionListeners.Add(func(data interface{}) {
 		log.HandlerErrs(cb(data.(core.Connection)))
 	})
+}
+
+// 当有连接接收到相关消息时触发
+func (s *webds) OnMsg(t message.Topic, m message.Func) *message.Subscriber {
+	if m == nil {
+		return nil
+	}
+	if s.onMsgListeners[t.String()] == nil {
+		s.onMsgListeners[t.String()] = message.NewSubscriberList()
+	}
+	return s.onMsgListeners[t.String()].Add(m)
+}
+
+func (s *webds) FireMsg(m *message.Message) {
+	ts := message.NewTopic(m.Target).String()
+	for t, listeners := range s.onMsgListeners {
+		if listeners.Len() == 0 {
+			continue
+		}
+		if strings.HasPrefix(ts, t) {
+			listeners.Range(func(s *message.Subscriber) {
+				s.Do(m)
+			})
+		}
+	}
 }
 
 func (s *webds) Subscribe(topic string, id string) {
@@ -216,6 +251,36 @@ func (s *webds) broadcast(topic *trie.Trie, msg []byte, connID string) {
 		}
 	}
 	return
+}
+
+func (s *webds) Listen(addr string) error {
+	s.addr = addr
+	return http.ListenAndServe(addr, s)
+}
+
+func (s *webds) AutoListen() error {
+	min := s.cfg.ClusterPortMin
+	max := s.cfg.ClusterPortMax
+	index := min
+	for {
+		s.addr = fmt.Sprintf(":%d", index)
+		_ = s.Listen(s.addr)
+		index++
+		if index > max {
+			break
+		}
+	}
+	return errors.New("no valid host")
+}
+
+func (s *webds) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	c, err := s.Upgrade(w, r)
+	if err != nil {
+		log.HandlerErrs(err)
+		return
+	}
+	defer c.Close()
+	log.HandlerErrs(c.Wait())
 }
 
 func (s *webds) Topics() *trie.Trie {

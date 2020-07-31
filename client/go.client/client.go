@@ -7,12 +7,9 @@ import (
 )
 
 var defaultCfg = &webds.Config{
-	ID:             "",
-	IDGenerator:    nil,
-	SuperiorMaster: nil,
-	LateralMaster:  nil,
-	EnableCluster:  false,
-	MsgPrefix:      nil,
+	ID:            "",
+	IDGenerator:   nil,
+	EnableCluster: false,
 }
 
 func New(id string, host string, port uint, path string, cfg core.ConnCfg) (core.Connection, error) {

@@ -25,6 +25,21 @@ var connPool = sync.Pool{
 	},
 }
 
+var nodeStatusMsg = func() func(id string, status string) []byte {
+	m := &message.Message{}
+	m.Target = message.TopicNodeStatus.String()
+	m.Type = message.Message_String
+	return func(id string, status string) []byte {
+		m.Data = []byte(id + ":" + status)
+		res, err := proto.Marshal(m)
+		if err != nil {
+			log.Warn().Msg(err.Error())
+			return nil
+		}
+		return res
+	}
+}()
+
 func releaseConn(c *conn) {
 	c.id = ""
 	c.line = nil
@@ -46,7 +61,6 @@ func getConn() *conn {
 func NewPassiveConn(id string, w http.ResponseWriter, r *http.Request, cfg core.ConnCfg) (core.Connection, error) {
 	cfg.Validate()
 	c := getConn()
-	c.level = -1
 	c.cfg = cfg
 	c.passive = true
 	c.id = id
@@ -78,6 +92,7 @@ func NewPassiveConn(id string, w http.ResponseWriter, r *http.Request, cfg core.
 	c.onErrorListeners = message.NewSubscriberList()
 	c.onTopicListeners = make(map[string]*message.SubscriberList)
 	c.echo(message.TopicAuth, "pass")
+	c.webds.Broadcast(message.TopicNodeStatus.String(), nodeStatusMsg(id, "1"), id)
 	return c, nil
 }
 
@@ -87,7 +102,6 @@ func NewActiveConn(id, host string, port uint, path string, cfg core.ConnCfg) (c
 	var err error
 	c := getConn()
 	c.cfg = cfg
-	c.level = 1
 	c.passive = false
 	c.id = id
 	c.ctx = cfg.Ctx()
@@ -133,11 +147,7 @@ type conn struct {
 	port      uint
 	path      string
 	targetUrl string
-	// <0: 下级节点， 只能对方主动发起请求， passive 只能为true
-	// 0: 平级节点， 双方可以互相访问， passive true/false
-	// >0: 上级节点， 只能向对方发起请求， passive 只能为false
-	level   int
-	msgType websocket.MessageType
+	msgType   websocket.MessageType
 
 	started      utils.SafeBool
 	disconnected utils.SafeBool
@@ -153,6 +163,9 @@ type conn struct {
 }
 
 func (c *conn) String() string {
+	if c.passive {
+		return c.targetID + " <-- " + c.id + "(" + c.TargetUrl() + ")"
+	}
 	return c.id + " --> " + c.targetID + "(" + c.TargetUrl() + ")"
 }
 
@@ -189,14 +202,6 @@ func (c *conn) ID() string {
 
 func (c *conn) Passive() bool {
 	return c.passive
-}
-
-func (c *conn) Level() int {
-	return c.level
-}
-
-func (c *conn) SetLevel(i int) {
-	c.level = i
 }
 
 func (c *conn) OnDelta(t time.Ticker, cb func()) {
@@ -329,14 +334,13 @@ func (c *conn) startPing() {
 	}
 }
 
-func (c *conn) startReader() error {
+func (c *conn) startReader() (err error) {
 	c.line.SetReadLimit(c.cfg.ReadBufferSize())
 	defer func() {
-		log.HandlerErrs(c.Close())
+		log.HandlerErrs(c.Close(), err)
 	}()
 	line := c.line
-	msgChan := c.msgChan
-	var err error
+	//msgChan := c.msgChan
 	for {
 		m := message.New()
 		err = wspb.Read(c.ctx, line, m)
@@ -353,14 +357,19 @@ func (c *conn) startReader() error {
 			}
 			return nil
 		}
-		msgChan <- m
+		//msgChan <- m
+		err = c.onMsg(m)
+		if err != nil {
+			log.Warn().Msg(err.Error())
+			err = nil
+		}
 	}
 }
 
 func (c *conn) msgReader() {
 	defer func() {
 		if e := recover(); e != nil {
-			log.Error().Err(nil).Msgf("ping error: %v", e)
+			log.Error().Err(nil).Msgf("msg error: %v", e)
 		}
 		log.HandlerErrs(c.Close())
 	}()
@@ -374,13 +383,18 @@ func (c *conn) msgReader() {
 	}
 }
 
-func (c *conn) Wait() error {
+func (c *conn) Wait() (err error) {
+	defer func() {
+		if e := recover(); e != nil {
+			log.Error().Err(nil).Interface("panic", e).Msg("")
+		}
+	}()
 	if c.started.SetTrue() {
 		c.stop = make(chan bool)
 		c.msgChan = make(chan *message.Message, 100)
 		go c.startPing()
 		// start the messages reader
-		go c.msgReader()
+		//go c.msgReader()
 		return c.startReader()
 
 	}
@@ -390,7 +404,7 @@ func (c *conn) Wait() error {
 
 func (c *conn) Close() error {
 	if c.disconnected.SetTrue() {
-		log.Debug().Msgf("%s (%v) closed, called from %s", c.String(), c.Passive(), utils.CallPath(1))
+		//log.Trace().Msgf("%s closed, called from %s", c.String(), utils.CallPath(1))
 		if c.webds != nil {
 			c.webds.DelConnection(c.id)
 		}
@@ -437,6 +451,9 @@ func (c *conn) fireConnect() {
 }
 
 func (c *conn) fireDisconnect() {
+	if c.Passive() && c.webds != nil {
+		c.webds.Broadcast(message.TopicNodeStatus.String(), nodeStatusMsg(c.id, "0"), c.id)
+	}
 	if c.onDisconnectListeners == nil {
 		return
 	}
@@ -459,7 +476,7 @@ func (c *conn) onMsg(m *message.Message) error {
 	if message.IsSysTopic(topic) {
 		log.HandlerErrs(c.onSysMsg(topic, m))
 	} else if message.IsPublicTopic(topic) && c.webds != nil {
-		m.Source += "/" + c.ID()
+		m.Source = "/s/" + c.ID()
 		buf, err := proto.Marshal(m)
 		if err != nil {
 			return err
@@ -484,7 +501,9 @@ func (c *conn) onMsg(m *message.Message) error {
 				s.Do(m)
 			})
 		}
-
+	}
+	if c.webds != nil {
+		c.webds.FireMsg(m)
 	}
 	return nil
 }
@@ -500,9 +519,13 @@ func (c *conn) onSysMsg(t message.Topic, m *message.Message) error {
 		if c.webds != nil {
 			return c.onTopicMsg(t, m)
 		}
+	case "node":
+		if c.webds != nil {
+			return c.onTopicMsg(t, m)
+		}
 	case "cluster":
 		if c.webds != nil && c.webds.Cluster() != nil {
-			c.webds.Cluster().Receive(c, t, string(m.Data))
+			c.webds.Cluster().Receive(c, t, m.Body())
 			return nil
 		}
 	}
@@ -535,6 +558,7 @@ func (c *conn) onTopicMsg(t message.Topic, m *message.Message) error {
 				return true
 			})
 			c.echo(message.TopicGetAllNodes, res)
+			c.webds.Subscribe(message.TopicNodeStatus.String(), c.id)
 		}
 	case message.TopicStopNode.String():
 		// 仅中断连接

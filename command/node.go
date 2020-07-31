@@ -5,7 +5,6 @@ import (
 	"github.com/urfave/cli/v2"
 	"github.com/veypi/utils/log"
 	"github.com/veypi/webds/message"
-	"time"
 )
 
 var Node = &cli.Command{
@@ -53,11 +52,9 @@ func runStopNode(c *cli.Context) error {
 		return err
 	}
 	conn.OnConnect(func() {
-		log.Warn().Msgf("%s stop ", time.Now())
 		for _, v := range c.Args().Slice() {
 			conn.Echo(message.TopicStopNode, v)
 		}
-		log.Warn().Msgf("%s stop ", time.Now())
 		log.HandlerErrs(conn.Close())
 	})
 	return conn.Wait()
