@@ -1,18 +1,17 @@
-package cmd
+package main
 
 import (
 	"fmt"
-	"github.com/urfave/cli"
+	"github.com/urfave/cli/v2"
 	"github.com/veypi/utils/log"
 	"github.com/veypi/webds/message"
-	"time"
 )
 
-var Node = cli.Command{
+var Node = &cli.Command{
 	Name:        "node",
 	Usage:       "webds node list/stop",
 	Description: "command about node",
-	Subcommands: []cli.Command{
+	Subcommands: []*cli.Command{
 		{
 			Name:   "list",
 			Usage:  "webds node list",
@@ -29,7 +28,7 @@ var Node = cli.Command{
 }
 
 func runNodeList(c *cli.Context) error {
-	conn, err := newConn(c)
+	conn, err := newConn()
 	if err != nil {
 		return err
 	}
@@ -44,20 +43,18 @@ func runNodeList(c *cli.Context) error {
 }
 
 func runStopNode(c *cli.Context) error {
-	if len(c.Args()) == 0 {
+	if c.Args().Len() == 0 {
 		log.Warn().Msg("missing node_id")
 		return nil
 	}
-	conn, err := newConn(c)
+	conn, err := newConn()
 	if err != nil {
 		return err
 	}
 	conn.OnConnect(func() {
-		log.Warn().Msgf("%s stop ", time.Now())
-		for _, v := range c.Args() {
+		for _, v := range c.Args().Slice() {
 			conn.Echo(message.TopicStopNode, v)
 		}
-		log.Warn().Msgf("%s stop ", time.Now())
 		log.HandlerErrs(conn.Close())
 	})
 	return conn.Wait()

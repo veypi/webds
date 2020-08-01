@@ -1,19 +1,14 @@
-const websocketStringMessageType = 0
-const websocketIntMessageType = 1
-const websocketBoolMessageType = 2
-const websocketByteMessageType = 3
+import protoRoot from './msg'
+
+const Message = protoRoot.lookup('message.message')
+const websocketByteMessageType = 0
+const websocketStringMessageType = 1
+const websocketIntMessageType = 2
+const websocketBoolMessageType = 3
 const websocketJSONMessageType = 4
-const websocketMessagePrefix = 'ws'
-const websocketMessageSeparator = ';'
-const websocketMessageTypeIdx = websocketMessagePrefix.length
-const websocketMessageRandomIdx = websocketMessageTypeIdx + 1
-const websocketMessageSourceIdx = websocketMessageRandomIdx + 4
-const websocketMessageTargetIdx = websocketMessageSourceIdx + 4
+
 const typeErr = new Error('type error')
-const NotAllowedTopic = new Error('this topic is not allowed to subscribe/publish')
-const UnformedMsg = new Error('unformed msg')
 let msgCounter = 0
-let source_idx = String.fromCharCode(0x00, 0x00, 0x00, 0x00)
 
 // utils
 function isNumber(obj) {
@@ -115,8 +110,8 @@ const InnerTopic = 'inner'
 const TopicSubscribe = new Topic('/sys/topic/subscribe')
 const TopicCancel = new Topic('/sys/topic/cancel')
 const TopicCancelAll = new Topic('/sys/topic/cancel_all')
-const TopicSysLog = new Topic('/sys/log')
-const TopicAuth = new Topic('/sys/auth')
+const TopicSysLog = new Topic('/sys/base/log')
+const TopicAuth = new Topic('/sys/base/auth')
 
 //
 class Ws {
@@ -138,7 +133,8 @@ class Ws {
     } else {
       this.conn = new WebSocket(endpoint)
     }
-    this.conn.onopen = function(evt) {
+    this.conn.binaryType = 'blob'
+    this.conn.onopen = function (evt) {
       _this.isReady = true
       for (let i in _this.messageListeners) {
         _this._subscribe(i)
@@ -146,12 +142,20 @@ class Ws {
       // _this.fireConnect()
       return null
     }
-    this.conn.onclose = function(evt) {
+    this.conn.onclose = function (evt) {
       _this.fireDisconnect()
       return null
     }
-    this.conn.onmessage = function(evt) {
-      _this.messageReceivedFromConn(evt)
+    this.conn.onmessage = function (evt) {
+      if (evt.data instanceof Blob) {
+        let reader = new FileReader()
+        reader.onload = () => {
+          _this.messageReceivedFromConn(Message.decode(new Uint8Array(reader.result)))
+        }
+        reader.readAsArrayBuffer(evt.data)
+      } else {
+        _this.messageReceivedFromConn(Message.decode(evt.data))
+      }
     }
   }
 
@@ -160,15 +164,14 @@ class Ws {
   // 格式: prefix(n)type(1)random_tag(4)source_idx(4)target_topic;msg
   _msg(topic, websocketMessageType, dataMessage) {
     msgCounter++
-    return (
-      websocketMessagePrefix +
-      String(websocketMessageType) +
-      int32ToBytesStr(msgCounter) +
-      source_idx +
-      topic.String() +
-      websocketMessageSeparator +
-      dataMessage
-    )
+    return Message.encode({
+      'type': websocketMessageType,
+      'tag': msgCounter,
+      'source': '',
+      'target': topic.String(),
+      'data': new Uint8Array(dataMessage),
+      'unix_time': Math.round(new Date().getTime() / 1000)
+    }).finish()
   }
 
   encodeMessage(event, data) {
@@ -194,72 +197,50 @@ class Ws {
     } else if (data !== null && typeof data !== 'undefined') {
       // if it has a second parameter but it's not a type we know, then fire this:
       console.log(
-        "unsupported type of input argument passed, try to not include this argument to the 'Emit'"
+        'unsupported type of input argument passed, try to not include this argument to the \'Emit\''
       )
     }
     return this._msg(event, t, m)
   }
 
-  // 格式: prefix(n)type(1)random_tag(4)source_idx(4)target_topic;msg
-  decodeMessage(topic, websocketMessage) {
-    let websocketMessageType = Number(websocketMessage[websocketMessageTypeIdx])
-    let theMessage = websocketMessage.substring(websocketMessageTargetIdx + topic.len() + 1)
-    console.log(websocketMessageType)
+  decodeMessage(m) {
+    let websocketMessageType = m.type
+    let theMessage = Uint8ArrayToString(m.data)
     if (websocketMessageType === websocketIntMessageType) {
       return parseInt(theMessage)
     } else if (websocketMessageType === websocketBoolMessageType) {
-      return Boolean(theMessage)
+      return theMessage === '1'
     } else if (websocketMessageType === websocketStringMessageType) {
       return theMessage
     } else if (websocketMessageType === websocketJSONMessageType) {
       return JSON.parse(theMessage)
     } else if (websocketMessageType === websocketByteMessageType) {
-      return JSON.parse(theMessage)
+      return theMessage
     } else {
       return null // invalid
     }
   }
 
-  getWebsocketCustomEvent(websocketMessage) {
-    if (websocketMessage.length < websocketMessageTargetIdx) {
-      return ''
-    }
-    let s = ''
-    for (let i = websocketMessageTargetIdx; i <= websocketMessage.length; i++) {
-      if (websocketMessage[i] === websocketMessageSeparator) {
-        break
-      }
-      s += websocketMessage[i]
-    }
-    // let s = websocketMessage.substring(websocketMessageTargetIdx, websocketMessage.length)
-    // return new Topic(s.substring(0, s.indexOf(websocketMessageSeparator)))
-    return new Topic(s)
-  }
-
   //
   // Ws Events
-  messageReceivedFromConn(evt) {
-    // check if qws message
-    let message = evt.data
-    if (message.indexOf(websocketMessagePrefix) !== -1) {
-      let topic = this.getWebsocketCustomEvent(message)
-      let data = this.decodeMessage(topic, message)
-      if (topic !== '') {
-        if (topic.FirstFragment() === SysTopic) {
-          if (topic.String() === TopicAuth.String()) {
-            if (data === 'pass') {
-              this.fireConnect()
-            } else if (data === 'duplicated client') {
-            } else {
-              console.log(data)
-            }
-          } else if (topic.String() === TopicSysLog.String()) {
+  messageReceivedFromConn(message) {
+    let topic = new Topic(message.target)
+    let data = this.decodeMessage(message)
+    if (topic !== '') {
+      if (topic.FirstFragment() === SysTopic) {
+        if (topic.String() === TopicAuth.String()) {
+          if (data === 'pass') {
+            this.fireConnect()
+          } else if (data === 'duplicated conn') {
+          } else {
             console.log(data)
           }
+        } else if (topic.String() === TopicSysLog.String()) {
+          console.log(data)
         }
-        // it's a custom message
-        this.fireMessage(topic, data)
       }
+      // it's a custom message
+      this.fireMessage(topic, data)
     }
   }
 
@@ -359,10 +340,19 @@ function randomString(len) {
 function int32ToBytesStr(i) {
   return String.fromCharCode(i >> 24, i >> 16, i >> 8, i)
 }
+
 function bytesToInt32(b) {
   return (
     b.charCodeAt(3) | (b.charCodeAt(2) << 8) | (b.charCodeAt(1) << 16) | (b.charCodeAt(0) << 24)
   )
+}
+
+function Uint8ArrayToString(fileData) {
+  var dataString = ''
+  for (var i = 0; i < fileData.length; i++) {
+    dataString += String.fromCharCode(fileData[i])
+  }
+  return dataString
 }
 
 export default Ws

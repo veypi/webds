@@ -1,29 +1,26 @@
-package cmd
+package main
 
 import (
 	"fmt"
-	"github.com/urfave/cli"
+	"github.com/urfave/cli/v2"
 	"github.com/veypi/utils/log"
-	client "github.com/veypi/webds/client/go.client"
-	"github.com/veypi/webds/core"
 	"github.com/veypi/webds/message"
 	"strconv"
 	"time"
 )
 
-var Topic = cli.Command{
+var Topic = &cli.Command{
 	Name:         "topic",
-	ShortName:    "",
 	Aliases:      nil,
 	Usage:        "topic",
 	UsageText:    "",
 	Description:  "some command about topic",
 	BashComplete: nil,
 	Action:       nil,
-	Subcommands: []cli.Command{
-		sub,
-		pub,
-		list,
+	Subcommands: []*cli.Command{
+		&sub,
+		&pub,
+		&list,
 	},
 	Flags: nil,
 }
@@ -33,11 +30,11 @@ var sub = cli.Command{
 	Usage:  "subscribe topics",
 	Action: runSub,
 	Flags: []cli.Flag{
-		cli.BoolFlag{
+		&cli.BoolFlag{
 			Name:  "hide",
 			Usage: "hide the msg output",
 		},
-		cli.Int64Flag{
+		&cli.Int64Flag{
 			Name:   "max",
 			Usage:  "max limited to receive msg",
 			Hidden: false,
@@ -47,7 +44,7 @@ var sub = cli.Command{
 }
 
 func runSub(c *cli.Context) error {
-	conn, err := newConn(c)
+	conn, err := newConn()
 	if err != nil {
 		return err
 	}
@@ -56,10 +53,11 @@ func runSub(c *cli.Context) error {
 		hide := c.Bool("hide")
 		max := c.Int("max")
 		log.Info().Msg("start subscribe " + t)
-		conn.Subscribe(message.NewTopic(t), func(data interface{}) {
+		conn.Subscribe(message.NewTopic(t), func(m *message.Message) {
 			step = append(step, time.Now().UnixNano())
 			if !hide {
-				fmt.Printf("%s %s  %d > %#v \n", time.Now().Format("2006-01-02 15:04:05"), t, len(step), data)
+				fmt.Printf("%d %s %s -> %s : %#v \n", len(step),
+					time.Now().Format("15:04:05"), m.Source, m.Target, m.Body())
 			}
 			if len(step) == max {
 				conn.Close()
@@ -75,7 +73,7 @@ func runSub(c *cli.Context) error {
 			}
 		})
 	}
-	for _, i := range c.Args() {
+	for _, i := range c.Args().Slice() {
 		fc(i)
 	}
 	return conn.Wait()
@@ -86,22 +84,22 @@ var pub = cli.Command{
 	Usage:  "publish a message",
 	Action: runPub,
 	Flags: []cli.Flag{
-		cli.BoolFlag{
+		&cli.BoolFlag{
 			Name:  "hide",
 			Usage: "hide the msg output",
 		},
-		cli.StringFlag{
+		&cli.StringFlag{
 			Name:  "type",
 			Usage: "message type, int/str.",
 			Value: "str",
 		},
-		cli.IntFlag{
+		&cli.IntFlag{
 			Name:        "times",
 			Usage:       "times",
 			Value:       1,
 			Destination: nil,
 		},
-		cli.DurationFlag{
+		&cli.DurationFlag{
 			Name:        "delta",
 			Value:       time.Second,
 			Destination: nil,
@@ -110,12 +108,12 @@ var pub = cli.Command{
 }
 
 func runPub(c *cli.Context) error {
-	arg := c.Args()
+	arg := c.Args().Slice()
 	if len(arg) != 2 {
 		log.Warn().Msg("please add topic and msg")
 		return nil
 	}
-	conn, err := newConn(c)
+	conn, err := newConn()
 	if err != nil {
 		return err
 	}
@@ -163,7 +161,7 @@ var list = cli.Command{
 }
 
 func runList(c *cli.Context) error {
-	conn, err := newConn(c)
+	conn, err := newConn()
 	if err != nil {
 		return err
 	}
@@ -175,9 +173,4 @@ func runList(c *cli.Context) error {
 		conn.Close()
 	})
 	return conn.Wait()
-}
-
-func newConn(c *cli.Context) (core.Connection, error) {
-	id := c.GlobalString("id")
-	return client.NewFromUrl(id, c.GlobalString("host"), nil)
 }

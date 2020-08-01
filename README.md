@@ -21,14 +21,6 @@ Distributed System with websocket
         websocket
 
 - 通信协议
-
-        主要以多级topic设计消息目标地址, 父子topic订阅节点会递归触发 其余参考ip层设计协议
-        参考iris  序列化成字节流，格式: prefix(n)type(1)random_tag(4)source_idx(4)target_topic;msg
-        type: 1个字节 msg type
-        random_tag: 5个byte
-        source_idx: 四个字节长度的数字 利用源地址映射 避免该地址长度线性增长 
-        target_topic: 目标topic
-        msg: json or protobuf
         保留下列1级topic，其余topic用于分发
             /sys   用于系统指令, 消息不广播, 用以两个节点之间连接维护状态和共享信息
             /inner 用于client 连接的Server直接处理，不进行广播, 响应函数由 conn.On 函数指定
@@ -65,6 +57,8 @@ Distributed System with websocket
 
 ## update
 
+- v0.2.7 更新cluster选举策略， 修复一些bug
+- v0.2.6 采用protobuf 重写通信协议
 - v0.2.5 重新组织代码，将重要对象拆分成interface, 优化代码逻辑，完善节点选举
 - v0.2.4 同级节点选举过程完成
 - v0.2.3 修改了消息协议 完善分布式设计思路

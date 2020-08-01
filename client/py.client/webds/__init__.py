@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 # vim:fenc=utf-8
 #
-# Copyright © 2020 light <light@1870499383@qq.com>
+# Copyright © 2020 veypi <veypi@qq.com>
 #
 # Distributed under terms of the MIT license.
 

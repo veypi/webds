@@ -5,17 +5,7 @@ import (
 	"github.com/veypi/utils/log"
 )
 
-type Subscriber interface {
-	Do(data interface{})
-	Valid() bool
-	SetMax(uint)
-	SetOnce()
-	Cancel()
-}
-
-var _ Subscriber = &subscriber{}
-
-func newSubscriber(callback Func) *subscriber {
+func newSubscriber(callback Func) *Subscriber {
 	switch callback.(type) {
 	case FuncBlank:
 	case FuncInt:
@@ -24,38 +14,39 @@ func newSubscriber(callback Func) *subscriber {
 	case FuncDefault:
 	case FuncBool:
 	case FuncError:
+	case RawFunc:
 	default:
 		panic("invalid callback function")
 	}
-	return &subscriber{callback: callback}
+	return &Subscriber{callback: callback}
 }
 
-type subscriber struct {
+type Subscriber struct {
 	callback   Func
 	counter    uint
 	counterMax uint
 	utils.FastLocker
 }
 
-func (s *subscriber) Valid() bool {
+func (s *Subscriber) Valid() bool {
 	if s.callback == nil || (s.counterMax > 0 && s.counter >= s.counterMax) {
 		return false
 	}
 	return true
 }
 
-func (s *subscriber) SetMax(i uint) {
+func (s *Subscriber) SetMax(i uint) {
 	s.counterMax = i
 }
 
-func (s *subscriber) SetOnce() {
+func (s *Subscriber) SetOnce() {
 	s.counterMax = 1
 }
-func (s *subscriber) Cancel() {
+func (s *Subscriber) Cancel() {
 	s.callback = nil
 }
 
-func (s *subscriber) Do(data interface{}) {
+func (s *Subscriber) Do(apd interface{}) {
 	s.Lock()
 	defer func() {
 		s.Unlock()
@@ -67,56 +58,60 @@ func (s *subscriber) Do(data interface{}) {
 		return
 	}
 	s.counter++
+	m, ok := apd.(*Message)
+	if ok {
+		if cb, ok := s.callback.(RawFunc); ok {
+			cb(m)
+			return
+		}
+		apd = m.Body()
+	}
 	switch cb := s.callback.(type) {
 	case FuncBlank:
 		cb()
 	case FuncBool:
-		cb(data.(bool))
+		cb(apd.(bool))
 	case FuncBytes:
-		cb(data.([]byte))
+		cb(apd.([]byte))
 	case FuncDefault:
-		cb(data)
+		cb(apd)
 	case FuncInt:
-		cb(data.(int))
+		cb(apd.(int))
 	case FuncString:
-		cb(data.(string))
+		cb(apd.(string))
 	case FuncError:
-		cb(data.(error))
+		cb(apd.(error))
+	case RawFunc:
+		cb(apd.(*Message))
 	default:
 		panic("it should occur")
 	}
 }
 
-type SubscriberList interface {
-	Add(callback Func) Subscriber
-	Range(func(s Subscriber))
-	Len() int
-}
-
-func NewSubscriberList() SubscriberList {
-	l := &subscriberList{}
+func NewSubscriberList() *SubscriberList {
+	l := &SubscriberList{}
 	return l
 }
 
-type subscriberList struct {
-	core []Subscriber
+type SubscriberList struct {
+	core []*Subscriber
 }
 
-func (l *subscriberList) Add(cb Func) Subscriber {
+func (l *SubscriberList) Add(cb Func) *Subscriber {
 	s := newSubscriber(cb)
 	if l.core == nil {
-		l.core = make([]Subscriber, 0, 10)
+		l.core = make([]*Subscriber, 0, 10)
 	}
 	l.core = append(l.core, s)
 	return s
 }
 
-func (l *subscriberList) Range(cb func(Subscriber)) {
+func (l *SubscriberList) Range(cb func(*Subscriber)) {
 	for _, s := range l.core {
 		cb(s)
 	}
 }
 
-func (l *subscriberList) Len() int {
+func (l *SubscriberList) Len() int {
 	return len(l.core)
 }
