@@ -1,6 +1,8 @@
 package cluster
 
 import (
+	"fmt"
+	"github.com/veypi/utils"
 	"github.com/veypi/utils/log"
 	"github.com/veypi/webds/cfg"
 	"github.com/veypi/webds/conn"
@@ -48,14 +50,22 @@ func (c *cluster) String() string {
 func (c *cluster) Receive(conn core.Connection, t message.Topic, data interface{}) {
 	switch t.String() {
 	case message.TopicClusterID.String():
+		conn.SetClusterID(data.(string))
 		if conn.Passive() {
-			if c.master.Alive() {
-				conn.Echo(message.TopicClusterRedirect, c.master.String())
-			} else {
-				c.addSlaveMaster(data.(string), conn)
-			}
 			conn.Echo(message.TopicClusterID, c.ID())
 			conn.Echo(message.TopicClusterLevel, int(c.level))
+		}
+	case message.TopicClusterLevel.String():
+		if conn.Passive() {
+			c.Lock()
+			defer c.Unlock()
+			c.addSlaveMaster(conn.ClusterID(), conn)
+			if m := c.search(conn.ClusterID()); m != nil {
+				m.level = uint(data.(int))
+			}
+			if c.master.Alive() {
+				conn.Echo(message.TopicClusterRedirect, c.master.String())
+			}
 		}
 	case message.TopicClusterInfo.String():
 		c.updateFromInfo(conn, data.(string))
@@ -68,24 +78,29 @@ func (c *cluster) Receive(conn core.Connection, t message.Topic, data interface{
 func (c *cluster) dial(m *master) {
 	m.redirect = nil
 	m.lastConnected = time.Now()
-	if m.conn != nil && m.conn.Alive() {
-		m.conn.Close()
+	if m.Conn() != nil && m.Alive() {
+		m.Conn().Close()
 	}
-	var err error
-	m.conn, err = conn.NewActiveConn(c.ID(), m.host, m.port, m.path, c.cfg)
+	con, err := conn.NewActiveConn(c.ID(), m.host, m.port, m.path, c.cfg)
 	if err != nil {
 		m.failedCount++
 		return
 	}
+	m.SetConn(con)
 	m.failedCount = 0
-	go m.conn.Wait()
 	stuck := make(chan bool, 1)
 	closed := false
-	m.conn.Subscribe(message.TopicClusterID, func(id string) {
+	go func() {
+		m.Conn().Wait()
+		if !closed {
+			stuck <- false
+		}
+	}()
+	m.Conn().Subscribe(message.TopicClusterID, func(id string) {
 		m.id = id
-		m.conn.SetTargetID(id)
+		m.Conn().SetTargetID(id)
 	})
-	m.conn.Subscribe(message.TopicClusterRedirect, func(s string) {
+	m.Conn().Subscribe(message.TopicClusterRedirect, func(s string) {
 		data := strings.Split(s, ";")
 		if len(data) != 3 {
 			log.Warn().Msgf("receive invalid redirect data: %s", s)
@@ -109,11 +124,12 @@ func (c *cluster) dial(m *master) {
 		}
 		m.redirect = temp
 		if temp.level == m.level && closed {
-			m.conn.Close()
-			c.masterChan <- temp
+			m.Conn().Close()
+		} else if !closed {
+			panic("it should not happened")
 		}
 	})
-	m.conn.Subscribe(message.TopicClusterLevel, func(data int) {
+	m.Conn().Subscribe(message.TopicClusterLevel, func(data int) {
 		level := uint(data)
 		m.level = level
 		// 决定是否断开重新寻找目标
@@ -124,10 +140,12 @@ func (c *cluster) dial(m *master) {
 		if sth, ok := c.slaves.Load(m.id); ok && sth != nil {
 			res = false
 		}
-		stuck <- res
+		if !closed {
+			stuck <- res
+		}
 	})
-	m.conn.Echo(message.TopicClusterID, m.selfID)
-	c.sendInfo(m.conn)
+	m.Conn().Echo(message.TopicClusterID, c.selfID)
+	c.sendInfo(m.Conn())
 	select {
 	case res := <-stuck:
 		closed = true
@@ -138,10 +156,13 @@ func (c *cluster) dial(m *master) {
 	case <-time.After(time.Second * 3):
 		log.Warn().Msg("waiting for connect to master timeout")
 	}
-	if m.conn != nil && m.conn.Alive() {
-		m.conn.Close()
+	if m.Conn() != nil && m.Alive() {
+		if m.Conn().ID() != c.selfID {
+			panic("error")
+		}
+		m.Conn().Close()
 	}
-	m.conn = nil
+	m.SetConn(nil)
 }
 
 func (c *cluster) Start() {
@@ -151,7 +172,7 @@ func (c *cluster) Start() {
 		}
 	}()
 	ticker := time.NewTicker(time.Second * 1)
-	c.masterChan <- c.nextTryToConnect()
+	c.tryMaster(c.nextTryToConnect())
 	count := 0
 	for {
 		select {
@@ -167,48 +188,74 @@ func (c *cluster) Start() {
 			} else if c.master.Alive() {
 				//log.Warn().Msgf("ignore %s to replace %s", m.String(), c.master.String())
 				// 略过
-			} else if m.Alive() {
-				if !c.suitable(m) {
-					break
-				}
-				c.master = m
-				c.slaves.Range(func(key, value interface{}) bool {
-					temp := value.(core.Connection)
-					temp.Echo(message.TopicClusterRedirect, m.String())
-					return true
-				})
-				m.Conn().OnDisconnect(func() {
-					// 重试策略 先查是否有跳转，再重试，再全局寻找
-					c.master = nil
-					c.masterChan <- c.nextTryToConnect()
-				}).SetOnce()
-				log.Info().Msgf("%s succeed to set {%s} as its master", c.cfg.Webds().String(), m.String())
-			} else {
-				log.Debug().Msgf("%s try to connect to %s", c.cfg.Webds().String(), m.String())
+			} else if m.Alive() && c.suitable(m) {
+				log.Warn().Msgf("%s     %s: %p", c.cfg.Webds().String(), m.String(), m.Conn())
+				m.Conn().Close()
+				//c.setMaster(m)
+			} else if c.suitable(m) {
 				c.dial(m)
 				if m.Alive() {
-					if c.suitable(m) {
-						c.masterChan <- m
-						break
+					if nm := c.nextTryToConnect(); m.level == c.level-1 && c.cfg.ClusterMode == 0 && c.suitable(nm) {
+						m.Conn().Close()
+						c.tryMaster(nm)
+					} else {
+						c.setMaster(m)
 					}
-					m.conn.Close()
-				}
-				if m.redirect != nil && c.necessaryToConnect(m.redirect) {
-					c.masterChan <- m.redirect
-				} else if m = c.nextTryToConnect(); m != nil {
-					c.masterChan <- m
+				} else if m.redirect != nil && m.level == m.redirect.level {
+					c.tryMaster(m.redirect)
+				} else if nm := c.nextTryToConnect(); nm != nil {
+					c.tryMaster(nm)
 				}
 			}
 		case <-ticker.C:
 			if count%100 == 0 && c.cfg.EnableAutoDetect && !c.master.Alive() {
-				c.autoSearchMaster()
+				go c.autoSearchMaster()
 			}
 			count++
 			if !c.Stable() {
-				c.masterChan <- c.nextTryToConnect()
+				c.tryMaster(c.nextTryToConnect())
 			}
 		}
 	}
+}
+
+func (c *cluster) tryMaster(m *master) {
+	if !c.suitable(m) {
+		return
+	}
+	log.Debug().Msgf("%s try to connect to %s: %s", c.cfg.Webds().String(), m.String(), utils.CallPath(1))
+	c.masterChan <- m
+}
+
+func (c *cluster) setMaster(m *master) {
+	c.Lock()
+	defer c.Unlock()
+	if !c.suitable(m) {
+		return
+	}
+	c.master = m
+	m.Conn().Echo(message.TopicClusterLevel, int(m.level))
+	c.slaves.Range(func(key, value interface{}) bool {
+		temp := value.(core.Connection)
+		temp.Echo(message.TopicClusterRedirect, m.String())
+		return true
+	})
+	id := m.Conn().ID()
+	p := fmt.Sprintf("%p %p", m, m.Conn())
+	m.Conn().OnDisconnect(func() {
+		// 重试策略 先查是否有跳转，再重试，再全局寻找
+		if m.Conn().ID() != id {
+			log.Warn().Msgf("%p %p:%s %s closed %s %s", m, m.Conn(), c.selfID, m.Conn().String(), id, p)
+			panic(p)
+		}
+		c.master = nil
+		if m.redirect != nil && m.redirect.level == m.level {
+			c.tryMaster(m.redirect)
+			return
+		}
+		c.tryMaster(c.nextTryToConnect())
+	}).SetOnce()
+	log.Info().Msgf("%s succeed to set {%s} as its master: %s", c.cfg.Webds().String(), m.String(), utils.CallPath(1))
 }
 
 // 添加平级从属节点
@@ -217,11 +264,6 @@ func (c *cluster) addSlaveMaster(id string, conn core.Connection) {
 	conn.OnDisconnect(func() {
 		c.slaves.Delete(id)
 	}).SetOnce()
-	for _, temp := range c.masters {
-		if temp.id == id {
-			temp.conn = conn
-		}
-	}
 }
 
 func (c *cluster) Slave() []core.Connection {
@@ -249,19 +291,33 @@ func (c *cluster) Master() core.Master {
 }
 
 func (c *cluster) nextTryToConnect() *master {
+	var last *master
 	for _, temp := range c.masters {
 		if c.necessaryToConnect(temp) {
-			return temp
+			if last == nil {
+				last = temp
+			} else {
+				if temp.level == last.level+1 && c.cfg.ClusterMode == 0 {
+					last = temp
+				} else if temp.level == last.level && temp.lastConnected.Sub(last.lastConnected) < 0 {
+					last = temp
+				} else if temp.level == 0 {
+					last = temp
+				}
+			}
 		}
 	}
-	return nil
+	return last
 }
 
 func (c *cluster) suitable(m *master) bool {
+	if m == nil {
+		return false
+	}
 	if m.id == c.selfID {
 		return false
 	}
-	if m.level == c.level-1 || (m.level == c.level && c.cfg.ClusterMode == 0) {
+	if m.level == 0 || m.level == c.level-1 || (m.level == c.level && c.cfg.ClusterMode == 0) {
 		return true
 	}
 	return false
@@ -272,6 +328,13 @@ func (c *cluster) necessaryToConnect(m *master) bool {
 		return false
 	}
 	if m.level > 0 && !c.suitable(m) {
+		return false
+	}
+	if m.redirect != nil && m.redirect.id == c.selfID {
+		return false
+	}
+
+	if sth, ok := c.slaves.Load(m.id); ok && sth != nil {
 		return false
 	}
 	delta := time.Now().Sub(m.lastConnected)
@@ -362,20 +425,13 @@ func (c *cluster) Del(url string) {
 	}
 }
 
-func (c *cluster) Range(f func(m core.Master) bool) {
-	cdi := true
-	for _, m := range c.masters {
-		cdi = f(m)
-		if !cdi {
-			return
-		}
-	}
-}
-
-func (c *cluster) RangeConn(fc func(conn core.Connection) bool) {
+func (c *cluster) RangeCluster(fc func(conn core.Connection) bool) {
 	c.slaves.Range(func(key, value interface{}) bool {
 		return fc(value.(core.Connection))
 	})
+	if c.master.Alive() {
+		fc(c.master.Conn())
+	}
 }
 
 func (c *cluster) search(url string) *master {
@@ -388,6 +444,11 @@ func (c *cluster) search(url string) *master {
 }
 
 func (c *cluster) autoSearchMaster() {
+	defer func() {
+		if e := recover(); e != nil {
+			log.Warn().Msgf("%v", e)
+		}
+	}()
 	ips := append(libs.GetLocalIps(), "127.0.0.1/32")
 	log.Debug().Msgf("%s start auto search: %v", c.cfg.Webds().String(), ips)
 	res := make([]string, 0, 10)
@@ -397,6 +458,8 @@ func (c *cluster) autoSearchMaster() {
 			log.Warn().Msg(err.Error())
 			continue
 		}
+		scanner.SetLimiter(1000)
+		// TODO 可能会阻塞住
 		r := scanner.ScanPortRange(c.cfg.ClusterPortMin, c.cfg.ClusterPortMax)
 		//r := scanner.Scan()
 		if len(r) > 0 {

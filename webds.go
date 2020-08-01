@@ -90,9 +90,6 @@ func (s *webds) Upgrade(w http.ResponseWriter, r *http.Request) (core.Connection
 	if err != nil {
 		return nil, err
 	}
-	if c.ID() == "" {
-		err = ErrID
-	}
 	c.SetTargetID(s.ID())
 	s.onConnectionListeners.Range(func(s *message.Subscriber) {
 		s.Do(c)

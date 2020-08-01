@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"fmt"
+	"github.com/veypi/utils/log"
 	"github.com/veypi/webds/core"
 	"time"
 )
@@ -32,7 +33,7 @@ type master struct {
 	redirect      *master
 	failedCount   uint
 	// 存储连接
-	conn core.Connection
+	_conn core.Connection
 }
 
 func (m *master) Level() uint {
@@ -40,7 +41,14 @@ func (m *master) Level() uint {
 }
 
 func (m *master) Conn() core.Connection {
-	return m.conn
+	return m._conn
+}
+
+func (m *master) SetConn(c core.Connection) {
+	if c != nil {
+		log.Debug().Msgf("%s set conn %s: %p", m.selfID, c.String(), c)
+	}
+	m._conn = c
 }
 
 func (m *master) String() string {
@@ -59,5 +67,5 @@ func (m *master) ID() string {
 }
 
 func (m *master) Alive() bool {
-	return m != nil && m.conn != nil && m.conn.Alive()
+	return m != nil && m._conn != nil && m._conn.Alive()
 }

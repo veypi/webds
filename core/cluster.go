@@ -24,19 +24,6 @@ type Cluster interface {
 	Add(host string, port uint, path string) Master
 	AddUrl(url string) Master
 	Del(url string)
-	Range(func(m Master) bool)
-	RangeConn(func(c Connection) bool)
+	RangeCluster(func(c Connection) bool)
 	Slave() []Connection
-}
-
-type ClusterCfgs interface {
-	ConnCfg
-	ClusterMasters() []string
-	ClusterLevel() uint
-	ClusterTarget() uint
-	AllowedLowerTarget() bool
-	EnableAutoDetect() bool
-	ClusterPortMin() uint
-	ClusterPortMax() uint
-	ClusterSuffix() string
 }

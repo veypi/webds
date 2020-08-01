@@ -39,8 +39,6 @@ func DefaultIDGenerator(r *http.Request) string {
 	return xid.New().String()
 }
 
-var _ core.ConnCfg = &Config{}
-
 // Config the websocket server configuration
 // all of these are optional.
 type Config struct {

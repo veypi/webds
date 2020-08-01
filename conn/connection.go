@@ -3,21 +3,24 @@ package conn
 import (
 	"context"
 	"errors"
+	"fmt"
 	"github.com/golang/protobuf/proto"
 	"github.com/veypi/utils"
 	"github.com/veypi/utils/log"
+	"github.com/veypi/webds/cfg"
 	"github.com/veypi/webds/core"
 	"github.com/veypi/webds/message"
 	"io"
 	"net/http"
 	"nhooyr.io/websocket"
-	"nhooyr.io/websocket/wspb"
 	"strings"
 	"sync"
 	"time"
 )
 
 var ErrDuplicatedConn = errors.New("duplicated conn")
+
+var ErrID = errors.New("id is not exist")
 
 var connPool = sync.Pool{
 	New: func() interface{} {
@@ -55,10 +58,11 @@ func releaseConn(c *conn) {
 
 func getConn() *conn {
 	return connPool.Get().(*conn)
+	//return new(conn)
 }
 
 // 接收请求建立连接
-func NewPassiveConn(id string, w http.ResponseWriter, r *http.Request, cfg core.ConnCfg) (core.Connection, error) {
+func NewPassiveConn(id string, w http.ResponseWriter, r *http.Request, cfg *cfg.Config) (core.Connection, error) {
 	cfg.Validate()
 	c := getConn()
 	c.cfg = cfg
@@ -79,11 +83,17 @@ func NewPassiveConn(id string, w http.ResponseWriter, r *http.Request, cfg core.
 	c.started.ForceSetFalse()
 	c.disconnected.ForceSetFalse()
 	c.request = r
-	c.webds = nil
+	if c.id == "" {
+		c.echo(message.TopicAuth, ErrID.Error())
+		time.Sleep(time.Millisecond)
+		c.Close()
+		return nil, ErrID
+	}
 	if cfg.Webds() != nil && !cfg.Webds().AddConnection(c) {
 		c.echo(message.TopicAuth, ErrDuplicatedConn.Error())
+		time.Sleep(time.Millisecond)
 		c.Close()
-		return nil, ErrDuplicatedConn
+		return nil, fmt.Errorf("%s->%s: %w", id, cfg.Webds().ID(), ErrDuplicatedConn)
 	}
 	c.webds = cfg.Webds()
 	c.msgType = websocket.MessageBinary
@@ -97,7 +107,7 @@ func NewPassiveConn(id string, w http.ResponseWriter, r *http.Request, cfg core.
 }
 
 // 发起请求建立连接
-func NewActiveConn(id, host string, port uint, path string, cfg core.ConnCfg) (core.Connection, error) {
+func NewActiveConn(id, host string, port uint, path string, cfg *cfg.Config) (core.Connection, error) {
 	cfg.Validate()
 	var err error
 	c := getConn()
@@ -118,10 +128,9 @@ func NewActiveConn(id, host string, port uint, path string, cfg core.ConnCfg) (c
 	c.started.ForceSetFalse()
 	c.disconnected.ForceSetFalse()
 	c.msgType = websocket.MessageBinary
-	c.webds = nil
 	if cfg.Webds() != nil && !cfg.Webds().AddConnection(c) {
 		c.Close()
-		return nil, ErrDuplicatedConn
+		return nil, fmt.Errorf("%s->%s: %w", id, cfg.Webds().ID(), ErrDuplicatedConn)
 	}
 	c.webds = cfg.Webds()
 	c.onDisconnectListeners = message.NewSubscriberList()
@@ -134,11 +143,12 @@ func NewActiveConn(id, host string, port uint, path string, cfg core.ConnCfg) (c
 var _ core.Connection = &conn{}
 
 type conn struct {
-	ctx     context.Context
-	line    *websocket.Conn
-	id      string
-	passive bool
-	cfg     core.ConnCfg
+	ctx       context.Context
+	line      *websocket.Conn
+	id        string
+	passive   bool
+	clusterID string
+	cfg       *cfg.Config
 
 	request *http.Request
 	// 被动方式下为本身信息 主动模式下为对方信息
@@ -152,6 +162,7 @@ type conn struct {
 	started      utils.SafeBool
 	disconnected utils.SafeBool
 	stop         chan bool
+	stopWait     *sync.WaitGroup
 	msgChan      chan *message.Message
 	selfMU       sync.RWMutex
 
@@ -169,6 +180,12 @@ func (c *conn) String() string {
 	return c.id + " --> " + c.targetID + "(" + c.TargetUrl() + ")"
 }
 
+func (c *conn) ClusterID() string {
+	return c.clusterID
+}
+func (c *conn) SetClusterID(s string) {
+	c.clusterID = s
+}
 func (c *conn) TargetUrl() string {
 	if c.targetUrl == "" {
 		c.targetUrl = core.EncodeUrl(c.host, c.port, c.path)
@@ -271,9 +288,8 @@ func (c *conn) echo(t message.Topic, data interface{}) {
 		return
 	}
 	_, err = c.Write(m)
-	if err != nil {
-		log.HandlerErrs(err)
-		c.Close()
+	if err != nil && ignoreErr(err) != nil {
+		log.Trace().Err(err).Msg("write error")
 	}
 }
 
@@ -303,12 +319,16 @@ func (c *conn) write(websocketMessageType websocket.MessageType, p []byte) (int,
 	//c.selfMU.Lock()
 	//defer c.selfMU.Unlock()
 	// TODO: 是否有必要加锁
+	//if c.disconnected.IfTrue() {
+	//	return 0, errors.New("connection has closed")
+	//}
 	err := c.line.Write(c.ctx, websocketMessageType, p)
 	return len(p), err
 }
 
 func (c *conn) startPing() {
 	defer func() {
+		c.stopWait.Done()
 		if e := recover(); e != nil {
 			log.Error().Err(nil).Msgf("ping error: %v", e)
 		}
@@ -337,13 +357,15 @@ func (c *conn) startPing() {
 func (c *conn) startReader() (err error) {
 	c.line.SetReadLimit(c.cfg.ReadBufferSize())
 	defer func() {
+		c.stopWait.Done()
 		log.HandlerErrs(c.Close(), err)
 	}()
 	line := c.line
-	//msgChan := c.msgChan
+	msgChan := c.msgChan
 	for {
 		m := message.New()
-		err = wspb.Read(c.ctx, line, m)
+		_, buf, err := line.Read(c.ctx)
+		//err = wspb.Read(c.ctx, line, m)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return nil
@@ -357,17 +379,20 @@ func (c *conn) startReader() (err error) {
 			}
 			return nil
 		}
-		//msgChan <- m
-		err = c.onMsg(m)
+		err = proto.Unmarshal(buf, m)
 		if err != nil {
 			log.Warn().Msg(err.Error())
-			err = nil
+			return err
+		}
+		if !c.disconnected.IfTrue() {
+			msgChan <- m
 		}
 	}
 }
 
 func (c *conn) msgReader() {
 	defer func() {
+		c.stopWait.Done()
 		if e := recover(); e != nil {
 			log.Error().Err(nil).Msgf("msg error: %v", e)
 		}
@@ -375,10 +400,20 @@ func (c *conn) msgReader() {
 	}()
 	msgChan := c.msgChan
 	var err error
-	for data := range msgChan {
-		err = c.onMsg(data)
-		if err != nil {
-			log.Warn().Msg(err.Error())
+	for {
+		select {
+		case m := <-msgChan:
+			if m == nil {
+				return
+			}
+			err = c.onMsg(m)
+			if err != nil {
+				log.Warn().Msg(err.Error())
+			}
+			m.Release()
+		case <-c.stop:
+			return
+
 		}
 	}
 }
@@ -386,47 +421,47 @@ func (c *conn) msgReader() {
 func (c *conn) Wait() (err error) {
 	defer func() {
 		if e := recover(); e != nil {
-			log.Error().Err(nil).Interface("panic", e).Msg("")
+			err = fmt.Errorf("connection closed: %v", e)
+			log.Error().Err(err).Msg("")
 		}
 	}()
 	if c.started.SetTrue() {
 		c.stop = make(chan bool)
+		c.stopWait = &sync.WaitGroup{}
+		c.stopWait.Add(3)
 		c.msgChan = make(chan *message.Message, 100)
 		go c.startPing()
 		// start the messages reader
-		//go c.msgReader()
+		go c.msgReader()
 		return c.startReader()
 
 	}
-	log.Warn().Msg("connection has been started")
+	log.Warn().Msg("connection has been started: " + utils.CallPath(1))
 	return nil
 }
 
 func (c *conn) Close() error {
 	if c.disconnected.SetTrue() {
-		//log.Trace().Msgf("%s closed, called from %s", c.String(), utils.CallPath(1))
+		//log.Trace().Msgf("%s closed, called from %s %v", c.String(), utils.CallPath(1), c.webds != nil)
 		if c.webds != nil {
 			c.webds.DelConnection(c.id)
 		}
 		if c.started.IfTrue() {
 			close(c.stop)
-			close(c.msgChan)
+			if c.msgChan != nil {
+				close(c.msgChan)
+				c.msgChan = nil
+			}
 			c.stop = nil
-			c.msgChan = nil
 		}
 		err := c.line.Close(websocket.StatusNormalClosure, "")
 		c.fireDisconnect()
+		c.stopWait.Wait()
+		c.stopWait = nil
 		releaseConn(c)
 		if err != nil {
-			if errors.Is(err, io.EOF) {
-				return nil
-			}
-			if websocket.CloseStatus(err) == websocket.StatusGoingAway {
-				return nil
-			}
-			if websocket.CloseStatus(err) != websocket.StatusNormalClosure {
-				return err
-			}
+			err = errors.Unwrap(err)
+			return ignoreErr(err)
 		}
 		return nil
 	}
@@ -476,13 +511,13 @@ func (c *conn) onMsg(m *message.Message) error {
 	if message.IsSysTopic(topic) {
 		log.HandlerErrs(c.onSysMsg(topic, m))
 	} else if message.IsPublicTopic(topic) && c.webds != nil {
-		m.Source = "/s/" + c.ID()
+		m.Source = m.Source + "/" + c.ID()
 		buf, err := proto.Marshal(m)
 		if err != nil {
 			return err
 		}
 		if c.webds != nil && c.webds.Cluster() != nil {
-			c.webds.Cluster().RangeConn(func(nc core.Connection) bool {
+			c.webds.Cluster().RangeCluster(func(nc core.Connection) bool {
 				if nc.ID() != c.id {
 					nc.Write(buf)
 				}
@@ -502,7 +537,7 @@ func (c *conn) onMsg(m *message.Message) error {
 			})
 		}
 	}
-	if c.webds != nil {
+	if c.cfg.EnableCluster && c.webds != nil {
 		c.webds.FireMsg(m)
 	}
 	return nil
@@ -587,4 +622,20 @@ func (c *conn) onBaseMsg(t message.Topic, m *message.Message) error {
 		}
 	}
 	return nil
+}
+
+func ignoreErr(err error) error {
+	if errors.Is(err, io.EOF) {
+		return nil
+	}
+	if err.Error() == "already wrote close" {
+		return nil
+	}
+	if websocket.CloseStatus(err) == websocket.StatusGoingAway {
+		return nil
+	}
+	if websocket.CloseStatus(err) == websocket.StatusNormalClosure {
+		return nil
+	}
+	return err
 }

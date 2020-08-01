@@ -1,6 +1,7 @@
 package libs
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"github.com/sparrc/go-ping"
@@ -14,6 +15,12 @@ import (
 )
 
 var cidrReg, _ = regexp.Compile("^(\\d+\\.\\d+\\.\\d+\\.\\d+)/(\\d+)$")
+
+func handlePanic() {
+	if e := recover(); e != nil {
+		log.Error().Err(nil).Msgf("%v", e)
+	}
+}
 
 func NewScanner(cidr string) (*scanner, error) {
 	if len(cidrReg.FindAllStringSubmatch(cidr, -1)) == 0 {
@@ -31,7 +38,8 @@ func NewScanner(cidr string) (*scanner, error) {
 	}
 	s := &scanner{
 		hosts:   ips,
-		limiter: 100,
+		limiter: 50,
+		timeout: time.Minute,
 	}
 	return s, nil
 }
@@ -41,6 +49,15 @@ type scanner struct {
 	limiter    int
 	taskChan   chan string
 	resultChan chan string
+	ctx        context.Context
+	cancel     context.CancelFunc
+	timeout    time.Duration
+}
+
+func (s *scanner) Stop() {
+	if s.cancel != nil {
+		s.cancel()
+	}
 }
 
 func (s *scanner) SetLimiter(max int) {
@@ -54,21 +71,25 @@ func (s *scanner) startScan(choice uint) {
 	for i := 0; i < s.limiter; i++ {
 		g.Add(1)
 		go func() {
+			defer handlePanic()
+			defer g.Done()
 			for {
-				h := <-s.taskChan
-				if h == "" {
-					g.Done()
+				select {
+				case h := <-s.taskChan:
+					if h == "" {
+						return
+					}
+					if choice == 1 {
+						if s.ping(h) {
+							s.resultChan <- h
+						}
+					} else {
+						if s.isOpen(h) {
+							s.resultChan <- h
+						}
+					}
+				case <-s.ctx.Done():
 					return
-				}
-				if choice == 1 {
-					if s.ping(h) {
-						s.resultChan <- h
-					}
-
-				} else {
-					if s.isOpen(h) {
-						s.resultChan <- h
-					}
 				}
 			}
 		}()
@@ -77,6 +98,8 @@ func (s *scanner) startScan(choice uint) {
 }
 
 func (s *scanner) Scan() []string {
+	s.ctx, s.cancel = context.WithTimeout(context.Background(), s.timeout)
+	defer s.cancel()
 	s.taskChan = make(chan string, s.limiter*2)
 	s.resultChan = make(chan string, s.limiter*2)
 	results := make([]string, 0, 20)
@@ -88,16 +111,20 @@ func (s *scanner) Scan() []string {
 	}()
 	go func() {
 		for {
-			h := <-s.resultChan
-			if h == "" {
+			select {
+			case h := <-s.resultChan:
+				if h == "" {
+					return
+				}
+				results = append(results, h)
+			case <-s.ctx.Done():
 				return
+
 			}
-			results = append(results, h)
 		}
 	}()
 	s.startScan(1)
 	close(s.resultChan)
-	time.Sleep(time.Millisecond)
 	return results
 }
 
@@ -107,6 +134,8 @@ func (s *scanner) ScanPorts(ports ...uint) []string {
 		strPorts[i] = fmt.Sprintf(":%d", ports[i])
 	}
 	aliveHosts := s.Scan()
+	s.ctx, s.cancel = context.WithTimeout(context.Background(), s.timeout)
+	defer s.cancel()
 	s.taskChan = make(chan string, s.limiter*2)
 	s.resultChan = make(chan string, s.limiter*2)
 
@@ -121,11 +150,16 @@ func (s *scanner) ScanPorts(ports ...uint) []string {
 	results := make([]string, 0, 20)
 	go func() {
 		for {
-			h := <-s.resultChan
-			if h == "" {
+			select {
+			case h := <-s.resultChan:
+				if h == "" {
+					return
+				}
+				results = append(results, h)
+			case <-s.ctx.Done():
 				return
+
 			}
-			results = append(results, h)
 		}
 	}()
 	s.startScan(0)
@@ -151,12 +185,13 @@ func (s *scanner) ScanPortRange(min uint, max uint) []string {
 }
 
 func (s *scanner) ping(host string) bool {
+	// TODO
 	pinger, err := ping.NewPinger(host)
 	if err != nil {
 		return false
 	}
-	pinger.Count = 3
-	pinger.Timeout = time.Millisecond * 100
+	pinger.Count = 1
+	pinger.Timeout = time.Millisecond * 10
 	pinger.Run()                 // blocks until finished
 	stats := pinger.Statistics() // get send/receive/rtt stats
 	if stats.PacketsRecv > 0 {

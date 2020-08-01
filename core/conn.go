@@ -1,10 +1,8 @@
 package core
 
 import (
-	"context"
 	"github.com/veypi/webds/message"
 	"io"
-	"time"
 )
 
 type (
@@ -13,19 +11,13 @@ type (
 	ConnectFunc    = message.FuncBlank
 )
 
-type ConnCfg interface {
-	Validate()
-	Ctx() context.Context
-	Webds() Webds
-	PingPeriod() time.Duration
-	ReadTimeout() time.Duration
-	ReadBufferSize() int64
-}
-
 type Connection interface {
 	ID() string
+	String() string
 	// 判断是个被动建立的连接还是主动建立的连接
 	Passive() bool
+	ClusterID() string
+	SetClusterID(string)
 	TargetID() string
 	TargetUrl() string
 	SetTargetID(string)
