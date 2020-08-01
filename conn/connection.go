@@ -445,9 +445,6 @@ func (c *conn) Close() error {
 		//log.Trace().Msgf("%s closed, called from %s %v", c.String(), utils.CallPath(1), c.webds != nil)
 		err := c.line.Close(websocket.StatusNormalClosure, "")
 		c.fireDisconnect()
-		if c.webds != nil {
-			c.webds.DelConnection(c.id)
-		}
 		if c.started.IfTrue() {
 			close(c.stop)
 			if c.msgChan != nil {
@@ -457,6 +454,9 @@ func (c *conn) Close() error {
 			c.stop = nil
 			c.stopWait.Wait()
 			c.stopWait = nil
+		}
+		if c.webds != nil {
+			c.webds.DelConnection(c.id)
 		}
 		releaseConn(c)
 		if err != nil {
