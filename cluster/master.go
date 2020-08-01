@@ -2,7 +2,6 @@ package cluster
 
 import (
 	"fmt"
-	"github.com/veypi/utils/log"
 	"github.com/veypi/webds/core"
 	"time"
 )
@@ -45,9 +44,6 @@ func (m *master) Conn() core.Connection {
 }
 
 func (m *master) SetConn(c core.Connection) {
-	if c != nil {
-		log.Debug().Msgf("%s set conn %s: %p", m.selfID, c.String(), c)
-	}
 	m._conn = c
 }
 

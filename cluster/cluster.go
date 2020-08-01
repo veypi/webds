@@ -223,7 +223,7 @@ func (c *cluster) tryMaster(m *master) {
 	if !c.suitable(m) {
 		return
 	}
-	log.Debug().Msgf("%s try to connect to %s: %s", c.cfg.Webds().String(), m.String(), utils.CallPath(1))
+	//log.Debug().Msgf("%s try to connect to %s: %s", c.cfg.Webds().String(), m.String(), utils.CallPath(1))
 	c.masterChan <- m
 }
 

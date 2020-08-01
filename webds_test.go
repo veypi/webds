@@ -21,7 +21,7 @@ func TestNew(t *testing.T) {
 
 	log.Info().Msgf("start webds server ")
 	c.IDGenerator = func(r *http.Request) string {
-		return "user_" + r.Header.Get("id")
+		return "c" + r.Header.Get("id")
 	}
 	var seed = rand.New(rand.NewSource(time.Now().UnixNano()))
 	newC := func(c Config) {
@@ -32,7 +32,7 @@ func TestNew(t *testing.T) {
 			log.Warn().Msg(err.Error())
 		}
 	}
-	for i := 1; i < 3; i++ {
+	for i := 1; i < 6; i++ {
 		c.ID = fmt.Sprintf("n%d", i)
 		go newC(c)
 	}
