@@ -16,8 +16,10 @@ type Webds interface {
 	AddConnection(Connection) bool
 	DelConnection(id string)
 	GetConnection(id string) Connection
+	GetConnectionsByTopic(topic string) []Connection
 	Range(func(id string, c Connection) bool)
 	Broadcast(topic string, msg []byte, id string)
+	BroadcastMsg(topic string, msg interface{})
 	Subscribe(topic string, id string)
 	CancelSubscribe(topic string, id string)
 	CancelAll(id string)

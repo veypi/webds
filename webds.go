@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/veypi/utils"
 	"github.com/veypi/utils/log"
 	"github.com/veypi/webds/cfg"
 	"github.com/veypi/webds/cluster"
@@ -58,10 +59,10 @@ func New(cfg *Config) *webds {
 		onMsgListeners:        make(map[string]*message.SubscriberList),
 	}
 	w.cfg.SetWebds(w)
+	w.cluster = cluster.NewCluster(cfg.ID, cfg)
 	if !cfg.EnableCluster {
 		return w
 	}
-	w.cluster = cluster.NewCluster(cfg.ID, cfg)
 	for _, url := range cfg.ClusterMasters {
 		w.cluster.AddUrl(url)
 	}
@@ -86,7 +87,7 @@ func (s *webds) Upgrade(w http.ResponseWriter, r *http.Request) (core.Connection
 	if !s.cfg.CheckOrigin(r) {
 		return nil, ErrOrigin
 	}
-	c, err := conn.NewPassiveConn(s.cfg.IDGenerator(r), w, r, s.cfg)
+	c, err := conn.NewPassiveConn(w, r, s.cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -156,6 +157,9 @@ func (s *webds) FireMsg(m *message.Message) {
 }
 
 func (s *webds) Subscribe(topic string, id string) {
+	if topic == "" || topic == "/" {
+		log.Warn().Msgf("%s try to subscribe all: %s", id, utils.CallPath(1))
+	}
 	s.topics.AddSub(topic).AttachID(id)
 }
 
@@ -204,7 +208,7 @@ func (s *webds) GetConnections() []core.Connection {
 	return conns
 }
 
-func (s *webds) GetConnectionsByTopic(topic string) []core.Connection {
+func (s *webds) GetConnectionsByTopic(topic string) []Connection {
 	conns := make([]core.Connection, 0, 20)
 	sub := s.topics.Match(topic)
 	if sub == nil {
@@ -217,6 +221,22 @@ func (s *webds) GetConnectionsByTopic(topic string) []core.Connection {
 		}
 	}
 	return conns
+}
+
+func (s *webds) BroadcastMsg(topic string, msg interface{}) {
+	t := message.NewTopic(topic)
+	if !message.IsPublicTopic(t) {
+		log.Warn().Msg(message.ErrNotAllowedTopic.Error())
+		return
+	}
+	topic = t.String()
+	m, err := message.Encode(t, msg)
+	if err != nil {
+		log.HandlerErrs(err)
+		return
+	}
+	s.Broadcast(topic, m, "")
+
 }
 
 func (s *webds) Broadcast(topic string, msg []byte, connID string) {
@@ -273,6 +293,9 @@ func (s *webds) AutoListen() error {
 func (s *webds) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	c, err := s.Upgrade(w, r)
 	if err != nil {
+		if err.Error() == "id is not exist" {
+			return
+		}
 		log.HandlerErrs(err)
 		return
 	}

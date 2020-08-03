@@ -1,8 +1,10 @@
 package core
 
 import (
+	"context"
 	"github.com/veypi/webds/message"
 	"io"
+	"net/http"
 )
 
 type (
@@ -14,6 +16,12 @@ type (
 type Connection interface {
 	ID() string
 	String() string
+	Request() *http.Request
+
+	Set(string, interface{})
+	Get(string) interface{}
+	Ctx() context.Context
+
 	// 判断是个被动建立的连接还是主动建立的连接
 	Passive() bool
 	ClusterID() string
