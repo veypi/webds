@@ -160,7 +160,7 @@ func (t topic) Since(count int) string {
 }
 
 func (t topic) IsChildOf(p Topic) bool {
-	return bytes.HasPrefix(t, p.Bytes())
+	return bytes.HasPrefix(t, append(p.Bytes(), '/'))
 }
 
 func (t topic) Child(s string) Topic {

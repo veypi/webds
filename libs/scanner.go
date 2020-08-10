@@ -26,6 +26,9 @@ func NewScanner(cidr string) (*scanner, error) {
 	if len(cidrReg.FindAllStringSubmatch(cidr, -1)) == 0 {
 		return nil, errors.New("invalid cidr: " + cidr)
 	}
+	if strings.HasPrefix(cidr, "169") {
+		return nil, errors.New("un support cider range: " + cidr)
+	}
 	ip, ipnet, err := net.ParseCIDR(cidr)
 	if err != nil {
 		return nil, err
@@ -38,7 +41,7 @@ func NewScanner(cidr string) (*scanner, error) {
 	}
 	s := &scanner{
 		hosts:   ips,
-		limiter: 50,
+		limiter: 10,
 		timeout: time.Minute,
 	}
 	return s, nil

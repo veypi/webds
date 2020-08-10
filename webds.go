@@ -160,6 +160,7 @@ func (s *webds) Subscribe(topic string, id string) {
 	if topic == "" || topic == "/" {
 		log.Warn().Msgf("%s try to subscribe all: %s", id, utils.CallPath(1))
 	}
+	log.Debug().Msgf("%s subscribe %s", id, topic)
 	s.topics.AddSub(topic).AttachID(id)
 }
 

@@ -83,6 +83,7 @@ func NewPassiveConn(w http.ResponseWriter, r *http.Request, cfg *cfg.Config) (co
 	c.started.ForceSetFalse()
 	c.disconnected.ForceSetFalse()
 	c.request = r
+	c.msgType = websocket.MessageBinary
 	c.onDisconnectListeners = message.NewSubscriberList()
 	c.onConnectListeners = message.NewSubscriberList()
 	c.onErrorListeners = message.NewSubscriberList()
@@ -90,18 +91,15 @@ func NewPassiveConn(w http.ResponseWriter, r *http.Request, cfg *cfg.Config) (co
 	c.id = cfg.IDGenerator(c)
 	if c.id == "" {
 		c.echo(message.TopicAuth, ErrID.Error())
-		time.Sleep(time.Millisecond)
 		c.Close()
 		return nil, ErrID
 	}
 	if cfg.Webds() != nil && !cfg.Webds().AddConnection(c) {
 		c.echo(message.TopicAuth, ErrDuplicatedConn.Error())
-		time.Sleep(time.Millisecond)
 		c.Close()
 		return nil, fmt.Errorf("%s->%s: %w", c.id, cfg.Webds().ID(), ErrDuplicatedConn)
 	}
 	c.webds = cfg.Webds()
-	c.msgType = websocket.MessageBinary
 	c.echo(message.TopicAuth, "pass")
 	c.webds.Broadcast(message.TopicNodeStatus.String(), nodeStatusMsg(c.id, "1"), c.id)
 	return c, nil
@@ -118,6 +116,7 @@ func NewActiveConn(id, host string, port uint, path string, cfg *cfg.Config, hea
 	c.host = host
 	c.port = port
 	c.path = path
+	c.msgType = websocket.MessageBinary
 	c.ctx, c.stop = context.WithCancel(cfg.Ctx())
 	header := http.Header{"id": []string{c.id}}
 	for i := 0; i < len(headers)-1; i += 2 {
@@ -132,7 +131,6 @@ func NewActiveConn(id, host string, port uint, path string, cfg *cfg.Config, hea
 	}
 	c.started.ForceSetFalse()
 	c.disconnected.ForceSetFalse()
-	c.msgType = websocket.MessageBinary
 	if cfg.Webds() != nil && !cfg.Webds().AddConnection(c) {
 		c.Close()
 		return nil, fmt.Errorf("%s->%s: %w", id, cfg.Webds().ID(), ErrDuplicatedConn)
@@ -393,17 +391,11 @@ func (c *conn) startReader() (err error) {
 		_, buf, err := line.Read(c.ctx)
 		//err = wspb.Read(c.ctx, line, m)
 		if err != nil {
-			if errors.Is(err, io.EOF) {
-				return nil
-			}
-			switch websocket.CloseStatus(err) {
-			case websocket.StatusNormalClosure:
-			case websocket.StatusGoingAway:
-			default:
+			err = ignoreErr(err)
+			if err != nil {
 				c.FireOnError(err)
-				return err
 			}
-			return nil
+			return err
 		}
 		err = proto.Unmarshal(buf, m)
 		if err != nil {
@@ -642,7 +634,7 @@ func (c *conn) onBaseMsg(t message.Topic, m *message.Message) error {
 				c.echo(message.TopicAuth, "pass")
 			}
 		} else {
-			log.Warn().Interface("msg", m.Body()).Msg("auth failed")
+			log.Warn().Interface("msg", m.Body()).Msg("auth failed: " + c.String())
 		}
 	}
 	return nil
@@ -666,9 +658,10 @@ func ignoreErr(err error) error {
 	if errors.Is(err, io.EOF) {
 		return nil
 	}
-	if err.Error() == "already wrote close" {
+	errInfo := err.Error()
+	if errInfo == "already wrote close" {
 		return nil
-	} else if strings.HasSuffix(err.Error(), "context canceled") {
+	} else if strings.HasSuffix(errInfo, "context canceled") {
 		return nil
 	}
 	if websocket.CloseStatus(err) == websocket.StatusGoingAway {

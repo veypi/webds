@@ -81,13 +81,12 @@ func (c *cluster) dial(m *master) {
 	if m.Conn() != nil && m.Alive() {
 		m.Conn().Close()
 	}
+	m.failedCount++
 	con, err := conn.NewActiveConn(c.ID(), m.host, m.port, m.path, c.cfg)
 	if err != nil {
-		m.failedCount++
 		return
 	}
 	m.SetConn(con)
-	m.failedCount = 0
 	stuck := make(chan bool, 1)
 	closed := false
 	go func() {
@@ -151,6 +150,7 @@ func (c *cluster) dial(m *master) {
 		closed = true
 		close(stuck)
 		if m.Alive() && res {
+			m.failedCount = 0
 			return
 		}
 	case <-time.After(time.Second * 3):
@@ -212,7 +212,7 @@ func (c *cluster) Start() {
 				go c.autoSearchMaster()
 			}
 			count++
-			if !c.Stable() {
+			if !c.master.Alive() {
 				c.tryMaster(c.nextTryToConnect())
 			}
 		}
@@ -223,7 +223,6 @@ func (c *cluster) tryMaster(m *master) {
 	if !c.suitable(m) {
 		return
 	}
-	//log.Debug().Msgf("%s try to connect to %s: %s", c.cfg.Webds().String(), m.String(), utils.CallPath(1))
 	c.masterChan <- m
 }
 
@@ -338,14 +337,14 @@ func (c *cluster) necessaryToConnect(m *master) bool {
 		return false
 	}
 	delta := time.Now().Sub(m.lastConnected)
-	if delta < time.Millisecond*100 {
+	if delta < time.Second*5 {
 		return false
 	}
 	if m.redirect != nil && delta < time.Minute {
 		return false
 	}
 	// 指数间隔尝试
-	if m.failedCount > 0 && delta < time.Second<<(m.failedCount-1) {
+	if m.failedCount > 0 && delta < time.Second<<(m.failedCount+1) {
 		return false
 	}
 	return true
@@ -455,10 +454,9 @@ func (c *cluster) autoSearchMaster() {
 	for _, k := range ips {
 		scanner, err := libs.NewScanner(k)
 		if err != nil {
-			log.Warn().Msg(err.Error())
 			continue
 		}
-		scanner.SetLimiter(1000)
+		scanner.SetLimiter(10)
 		// TODO 可能会阻塞住
 		r := scanner.ScanPortRange(c.cfg.ClusterPortMin, c.cfg.ClusterPortMax)
 		//r := scanner.Scan()
