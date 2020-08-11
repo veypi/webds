@@ -25,6 +25,7 @@ type Subscriber struct {
 	callback   Func
 	counter    uint
 	counterMax uint
+	CallPath   string
 	utils.FastLocker
 }
 
@@ -51,7 +52,7 @@ func (s *Subscriber) Do(apd interface{}) {
 	defer func() {
 		s.Unlock()
 		if e := recover(); e != nil {
-			log.Error().Err(nil).Msgf("%v", e)
+			log.Error().Err(nil).Msgf("%v: ", e, s.CallPath)
 		}
 	}()
 	if !s.Valid() {
@@ -103,6 +104,7 @@ func (l *SubscriberList) Add(cb Func) *Subscriber {
 		l.core = make([]*Subscriber, 0, 10)
 	}
 	l.core = append(l.core, s)
+	s.CallPath = utils.CallPath(2)
 	return s
 }
 
