@@ -553,7 +553,7 @@ func (c *conn) onMsg(m *message.Message) error {
 			})
 		}
 	}
-	if c.cfg.EnableCluster && c.webds != nil {
+	if c.webds != nil {
 		c.webds.FireMsg(m)
 	}
 	return nil

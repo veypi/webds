@@ -3,8 +3,10 @@ package message
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"github.com/golang/protobuf/proto"
 	"github.com/json-iterator/go"
+	"github.com/veypi/utils"
 	"github.com/veypi/utils/log"
 	"strconv"
 	"strings"
@@ -197,13 +199,25 @@ func (x *Message) Body() interface{} {
 	case Message_Int:
 		d, err := strconv.Atoi(string(x.Data))
 		if err != nil {
-			log.Warn().Msg(err.Error())
+			log.Warn().Msg(err.Error() + utils.CallPath(1) + " " + string(x.Data))
 		}
 		return d
 	case Message_String:
 		return string(x.Data)
 	case Message_Bool:
 		return x.Data[0] == '1'
+	case Message_uint:
+		d, err := strconv.Atoi(string(x.Data))
+		if err != nil {
+			log.Warn().Msg(err.Error())
+		}
+		return d
+	case Message_float:
+		d, err := strconv.ParseFloat(string(x.Data), 64)
+		if err != nil {
+			log.Warn().Msg(err.Error())
+		}
+		return d
 	default:
 		return x.Data
 	}
@@ -245,6 +259,12 @@ func Encode(t Topic, data interface{}) ([]byte, error) {
 		} else {
 			m.Data = []byte{'0'}
 		}
+	case float64:
+		m.Type = Message_float
+		m.Data = []byte(fmt.Sprintf("%f", d))
+	case uint:
+		m.Type = Message_uint
+		m.Data = []byte(strconv.Itoa(int(d)))
 	default:
 		b, err := json.Marshal(data)
 		if err != nil {

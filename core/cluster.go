@@ -25,5 +25,8 @@ type Cluster interface {
 	AddUrl(url string) Master
 	Del(url string)
 	RangeCluster(func(c Connection) bool)
+	// 返回连接的下级cluster节点
 	Slave() []Connection
+	// 当cluster 连接到上级节点时触发
+	OnConnectedToMaster(fc func(Connection))
 }

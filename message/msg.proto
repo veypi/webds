@@ -8,6 +8,8 @@ message message {
     Int = 2;
     Bool = 3;
     JSON = 4;
+    uint = 6;
+    float = 5;
   }
   typ type = 1;
   uint64 tag= 2;

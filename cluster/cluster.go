@@ -32,13 +32,14 @@ func NewCluster(selfID string, cfg *cfg.Config) core.Cluster {
 var _ core.Cluster = &cluster{}
 
 type cluster struct {
-	cfg        *cfg.Config
-	selfID     string
-	level      uint
-	master     *master
-	masterChan chan *master
-	masters    []*master
-	slaves     *sync.Map
+	cfg         *cfg.Config
+	selfID      string
+	level       uint
+	master      *master
+	masterChan  chan *master
+	masters     []*master
+	slaves      *sync.Map
+	onConnected func(core.Connection)
 	sync.Locker
 }
 
@@ -254,6 +255,9 @@ func (c *cluster) setMaster(m *master) {
 		}
 		c.tryMaster(c.nextTryToConnect())
 	}).SetOnce()
+	if c.onConnected != nil {
+		c.onConnected(m.Conn())
+	}
 	log.Info().Msgf("%s succeed to set {%s} as its master: %s", c.cfg.Webds().String(), m.String(), utils.CallPath(1))
 }
 
@@ -440,6 +444,10 @@ func (c *cluster) search(url string) *master {
 		}
 	}
 	return nil
+}
+
+func (c *cluster) OnConnectedToMaster(fc func(connection core.Connection)) {
+	c.onConnected = fc
 }
 
 func (c *cluster) autoSearchMaster() {
