@@ -3,6 +3,7 @@ package message
 import (
 	"github.com/veypi/utils"
 	"github.com/veypi/utils/log"
+	"sync"
 )
 
 func newSubscriber(callback Func) *Subscriber {
@@ -90,15 +91,20 @@ func (s *Subscriber) Do(apd interface{}) {
 }
 
 func NewSubscriberList() *SubscriberList {
-	l := &SubscriberList{}
+	l := &SubscriberList{
+		mu: &sync.RWMutex{},
+	}
 	return l
 }
 
 type SubscriberList struct {
 	core []*Subscriber
+	mu   *sync.RWMutex
 }
 
 func (l *SubscriberList) Add(cb Func) *Subscriber {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	s := newSubscriber(cb)
 	if l.core == nil {
 		l.core = make([]*Subscriber, 0, 10)
@@ -109,8 +115,28 @@ func (l *SubscriberList) Add(cb Func) *Subscriber {
 }
 
 func (l *SubscriberList) Range(cb func(*Subscriber)) {
+	l.RemoveInvalid()
+	l.mu.RLock()
+	defer l.mu.RUnlock()
 	for _, s := range l.core {
 		cb(s)
+	}
+}
+
+func (l *SubscriberList) RemoveInvalid() {
+	l.mu.Lock()
+	l.mu.Unlock()
+	i := 0
+	for {
+		if i == len(l.core) {
+			return
+		}
+		if !l.core[i].Valid() {
+			l.core = append(l.core[:i], l.core[i+1:]...)
+			log.Info().Msg("removing sub")
+		} else {
+			i++
+		}
 	}
 }
 
