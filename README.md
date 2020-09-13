@@ -56,7 +56,7 @@ Distributed System with websocket
 - 变量逃逸分析 是否要大量采用interface来组织代码 评估性能损失
 
 ## update
-
+- v0.2.8 更新消息解码函数，订阅函数、id生成函数，fix bugs
 - v0.2.7 更新cluster选举策略， 修复一些bug
 - v0.2.6 采用protobuf 重写通信协议
 - v0.2.5 重新组织代码，将重要对象拆分成interface, 优化代码逻辑，完善节点选举
