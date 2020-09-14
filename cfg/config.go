@@ -19,8 +19,8 @@ const (
 	DefaultWebsocketPingPeriod = (DefaultWebsocketPongTimeout * 9) / 10
 	// DefaultWebsocketMaxMessageSize 1024
 	DefaultWebsocketMaxMessageSize = 1024
-	// DefaultWebsocketReadBufferSize 4096
-	DefaultWebsocketReadBufferSize = 4096
+	// DefaultWebsocketReadBufferSize 1MB
+	DefaultWebsocketReadBufferSize = 1024 * 1024
 	// DefaultWebsocketWriterBufferSize 4096
 	DefaultWebsocketWriterBufferSize = 4096
 	// DefaultEvtMessageKey is the default prefix of the underline websocket events
