@@ -634,7 +634,7 @@ func (c *conn) onBaseMsg(t message.Topic, m *message.Message) error {
 				c.echo(message.TopicAuth, "pass")
 			}
 		} else {
-			log.Warn().Interface("msg", m.Body()).Msg("auth failed: " + c.String())
+			c.FireOnError(errors.New("auth failed: "))
 		}
 	}
 	return nil

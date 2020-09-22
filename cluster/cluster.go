@@ -7,7 +7,7 @@ import (
 	"github.com/veypi/webds/cfg"
 	"github.com/veypi/webds/conn"
 	"github.com/veypi/webds/core"
-	"github.com/veypi/webds/libs"
+	"github.com/veypi/webds/libs/scan"
 	"github.com/veypi/webds/message"
 	"math/rand"
 	"strconv"
@@ -456,24 +456,17 @@ func (c *cluster) autoSearchMaster() {
 			log.Warn().Msgf("%v", e)
 		}
 	}()
-	ips := append(libs.GetLocalIps(), "127.0.0.1/32")
-	log.Debug().Msgf("%s start auto search: %v", c.cfg.Webds().String(), ips)
-	res := make([]string, 0, 10)
-	for _, k := range ips {
-		scanner, err := libs.NewScanner(k)
-		if err != nil {
-			continue
-		}
-		scanner.SetLimiter(10)
-		// TODO 可能会阻塞住
-		r := scanner.ScanPortRange(c.cfg.ClusterPortMin, c.cfg.ClusterPortMax)
-		//r := scanner.Scan()
-		if len(r) > 0 {
-			res = append(res, r...)
+	ips := append([]string{"127.0.0.1"}, scan.ScanAllIP()...)
+	cha := make(chan string, 10)
+	go scan.PortRange(ips, c.cfg.ClusterPortMin, c.cfg.ClusterPortMax, cha)
+	for {
+		select {
+		case h := <-cha:
+			if h == "" {
+				return
+			}
+			log.Info().Msg("auto find target: " + h)
+			c.addUrl(h)
 		}
 	}
-	for _, u := range res {
-		c.addUrl(u)
-	}
-	log.Debug().Msgf("%s end auto search: %v", c.cfg.Webds().String(), res)
 }
