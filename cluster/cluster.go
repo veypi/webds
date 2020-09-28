@@ -456,6 +456,7 @@ func (c *cluster) autoSearchMaster() {
 			log.Warn().Msgf("%v", e)
 		}
 	}()
+	log.Info().Msg("start auto detect")
 	ips := append([]string{"127.0.0.1"}, scan.ScanAllIP()...)
 	cha := make(chan string, 10)
 	go scan.PortRange(ips, c.cfg.ClusterPortMin, c.cfg.ClusterPortMax, cha)
@@ -463,6 +464,7 @@ func (c *cluster) autoSearchMaster() {
 		select {
 		case h := <-cha:
 			if h == "" {
+				log.Info().Msg("end auto detect")
 				return
 			}
 			log.Info().Msg("auto find target: " + h)
