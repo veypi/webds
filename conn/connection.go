@@ -96,8 +96,9 @@ func NewPassiveConn(w http.ResponseWriter, r *http.Request, cfg *cfg.Config) (co
 	}
 	if cfg.Webds() != nil && !cfg.Webds().AddConnection(c) {
 		c.echo(message.TopicAuth, ErrDuplicatedConn.Error())
+		err = fmt.Errorf("|%s|->%s: %w", c.id, cfg.Webds().ID(), ErrDuplicatedConn)
 		c.Close()
-		return nil, fmt.Errorf("%s->%s: %w", c.id, cfg.Webds().ID(), ErrDuplicatedConn)
+		return nil, err
 	}
 	c.webds = cfg.Webds()
 	c.echo(message.TopicAuth, "pass")

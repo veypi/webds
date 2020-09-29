@@ -297,7 +297,7 @@ func (s *webds) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if err.Error() == "id is not exist" {
 			return
 		}
-		log.HandlerErrs(err)
+		log.Warn().Msgf("occur error %s: %v", r.RemoteAddr, err)
 		return
 	}
 	defer c.Close()
